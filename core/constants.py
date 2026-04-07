@@ -1,0 +1,5 @@
+SAMPLE_TYPE_BINARY = "binary"
+SAMPLE_TYPE_OPD = "opd"
+SAMPLE_TYPE_COMBINED = "combined"
+
+BINARY_REWARD_VALUES = (-1, 0, 1)
