@@ -2,21 +2,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from transformers import AutoTokenizer
-
-from mini_openclaw_rl.data.chat_template import build_prompt
+from mini_openclaw_rl.data.chat_template import build_chat_prompt
 
 
-def load_tokenizer(model_name: str, padding_side: str = "left") -> Any:
-    """Load a Hugging Face tokenizer and ensure a pad token is set."""
-    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = padding_side
-    return tokenizer
+def encode_chat(tokenizer, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> tuple[str, list[int]]:
+    """Encode chat messages into prompt ids.
 
+    Args:
+        tokenizer: HuggingFace tokenizer.
+        messages: Chat messages.
+        tools: Optional tool schema list.
+    Returns:
+        Tuple of prompt text and prompt ids.
+    """
 
-def tokenize_messages(messages: list[dict[str, Any]], tokenizer: Any) -> list[int]:
-    """Tokenize chat messages into prompt ids."""
-    prompt = build_prompt(messages, tokenizer)
-    return tokenizer.encode(prompt, add_special_tokens=False)
+    prompt_text = build_chat_prompt(tokenizer, messages, tools=tools)
+    prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+    return prompt_text, prompt_ids
