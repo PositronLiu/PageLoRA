@@ -9,6 +9,8 @@ import torch
 
 from mini_openclaw_rl.core.constants import DEFAULT_SEED
 
+def LOG(x: str):
+    print("[LOG]: " + x)
 
 def set_seed(seed: int = DEFAULT_SEED) -> None:
     """Set random seeds across libraries.
