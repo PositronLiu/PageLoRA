@@ -3,13 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 
-def build_chat_prompt(tokenizer, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> str:
+def build_chat_prompt(tokenizer, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None, enable_thinking: bool = False) -> str:
     """Build a chat prompt using model template when available.
 
     Args:
         tokenizer: HuggingFace tokenizer.
         messages: Chat messages.
         tools: Optional tool schema list.
+        enable_thinking: Whether to enable Qwen3 thinking mode.
     Returns:
         Prompt text string.
     """
@@ -20,6 +21,7 @@ def build_chat_prompt(tokenizer, messages: list[dict[str, Any]], tools: list[dic
             tools=tools,
             tokenize=False,
             add_generation_prompt=True,
+            enable_thinking=enable_thinking,
         )
     # Fallback template for models without chat templates.
     parts = []
