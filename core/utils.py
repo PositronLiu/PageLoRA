@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from mini_openclaw_rl.core.constants import DEFAULT_SEED
+from core.constants import DEFAULT_SEED
 
 LOG_TO_TERMINAL = "terminal"
 LOG_TO_FILE = "file"

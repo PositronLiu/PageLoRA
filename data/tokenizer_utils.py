@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mini_openclaw_rl.data.chat_template import build_chat_prompt
+from data.chat_template import build_chat_prompt
 
 
 def encode_chat(tokenizer, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None, enable_thinking: bool = False) -> tuple[str, list[int]]:
