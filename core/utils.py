@@ -15,7 +15,6 @@ LOG_TO_FILE = "file"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE_PATH = PROJECT_ROOT / ".env"
 
-
 def _read_dotenv(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.exists():
