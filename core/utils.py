@@ -104,6 +104,8 @@ def LOG(message: str) -> None:
         return
     print(formatted, flush=True)
 
+def WARNING(message: str) -> None:
+    print(f"[WARNING]: {message}", flush=True)
 
 def set_seed(seed: int = DEFAULT_SEED) -> None:
     """Set random seeds across libraries.
