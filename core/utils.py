@@ -163,3 +163,9 @@ def maybe_set_env(name: str, value: str) -> None:
 
     if not os.getenv(name):
         os.environ[name] = value
+
+def ema(previous: float | None, value: float, alpha: float) -> float:
+    """Calculate the exponential moving average (EMA) of a value."""
+    if previous is None:
+        return value
+    return previous * (1.0 - alpha) + value * alpha
