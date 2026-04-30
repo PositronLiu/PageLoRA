@@ -36,6 +36,7 @@ class ModelConfig:
     lora_dropout: float = 0.05
     target_modules: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
     cpu_offload: bool = True
+    infer_cpu_offload: bool = False
 
 
 class ModelManager:
@@ -52,6 +53,7 @@ class ModelManager:
         self.config = config
         self.device = device or get_device()
         self.cpu_offload = config.cpu_offload
+        self._inference_dispatcher = None
         dtype = get_torch_dtype()
         LOG(f"ModelManager init model={config.model_name} device={self.device} dtype={dtype} cpu_offload={self.cpu_offload}")
 
@@ -281,3 +283,17 @@ class ModelManager:
         """
 
         return (p for p in self.model.parameters() if p.requires_grad)
+
+    def get_inference_dispatcher(self):
+        """Return a cached inference dispatcher for CPU-offloaded generation.
+
+        Construction is lazy because normal generation paths do not need this
+        object, and building it repeatedly would add avoidable overhead to
+        repeated foreground requests.
+        """
+
+        if self._inference_dispatcher is None:
+            from model.inference_dispatcher import InferenceDispatcher
+
+            self._inference_dispatcher = InferenceDispatcher(self.model, self.device)
+        return self._inference_dispatcher

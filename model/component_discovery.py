@@ -48,7 +48,10 @@ ROTARY_ATTR_PATHS = [
 
 
 def _get_nested_attr(obj: object, path: tuple[str, ...]) -> Optional[object]:
-    """Traverse a nested attribute path and return ``None`` on the first miss."""
+    """Traverse a nested attribute path and return ``None`` on the first miss.
+
+    A safe method to get obj.attr.attr... without risking an AttributeError. Returns None if any attribute does not exists. 
+    """
 
     current = obj
     for attr in path:
@@ -59,7 +62,10 @@ def _get_nested_attr(obj: object, path: tuple[str, ...]) -> Optional[object]:
 
 
 def _try_paths(obj: object, paths: list[tuple[str, ...]]) -> Optional[object]:
-    """Return the first successfully resolved attribute path."""
+    """Return the first successfully resolved attribute path.
+    
+    Iterates through candidate attribute paths and returns the first one that resolves to a non-None value. If none of the paths resolve, returns None.
+    """
 
     for path in paths:
         result = _get_nested_attr(obj, path)
