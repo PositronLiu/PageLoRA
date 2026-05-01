@@ -1,13 +1,20 @@
-"""Layer-local LoRA storage and forward helpers.
+"""Layer-local LoRA execution helpers.
 
-This module intentionally stays narrow:
+`ManualLoRALinear` intentionally stays narrow:
 
-- it owns per-linear LoRA parameter storage
-- it exposes efficient forward-time pointer switching
-- it does not own global adapter lifecycle semantics
+- it owns the base linear weight/bias references
+- it owns the currently bound serve slot for this layer
+- it owns the optional train workspace for this layer
+- it applies LoRA during forward
 
-Global concerns such as active logical adapter, active role, and train-workspace
-ownership belong to ``multilora.runtime.LoRARuntime``.
+It does not manage:
+
+- multiple logical adapters
+- global active adapter selection
+- checkpoint lifecycle
+- adapter offload policy
+
+Those belong to ``multilora.runtime.LoRARuntime``.
 """
 
 from __future__ import annotations
@@ -18,11 +25,6 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-_SANITIZE_TABLE = str.maketrans("./:-", "____")
-
-def sanitize_adapter_key(name: str) -> str:
-    return name.translate(_SANITIZE_TABLE)
 
 
 @dataclass
@@ -40,15 +42,15 @@ class LoRAModuleWeights:
 
 
 class ManualLoRALinear(nn.Module):
-    """Linear layer with multiple serve adapters and one optional train workspace.
+    """Single-layer LoRA execution unit.
 
-    ``serve`` adapters are long-lived and live in ``lora_serve_params``.
-    ``train`` is an on-demand workspace that only exists while one logical
-    adapter is being trained or resumed from an interrupted checkpoint.
+    The layer only knows about:
 
-    Forward stays efficient because the active LoRA pointers are cached in
-    ``_active_a`` / ``_active_b`` and do not require per-token dictionary
-    lookups.
+    - one currently bound serve adapter
+    - one optional train workspace
+    - one currently active role
+
+    Multi-adapter management is handled entirely by ``LoRARuntime``.
     """
 
     def __init__(
@@ -69,132 +71,118 @@ class ManualLoRALinear(nn.Module):
         self.scale = alpha / rank
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
-        # Long-lived serve registry. Keys are sanitized logical adapter names.
-        self.lora_serve_params = nn.ParameterDict()
+        # Bound serve slot for the currently active logical adapter.
+        self.serve_a: nn.Parameter | None = None
+        self.serve_b: nn.Parameter | None = None
 
-        # Optional train workspace. These parameters are materialized lazily from
-        # serve weights and released after commit or explicit discard.
-        # copy from self._active_a and self._active_b when training starts, and copy back & delete when training finishes. They are never directly read by forward.
-        # these copy will introduce extra D -> D traffic, but lora adapter usually isn't large (<100M for a 7B model)
+        # Optional train workspace for the current global train owner.
         self.train_a: nn.Parameter | None = None
         self.train_b: nn.Parameter | None = None
 
-        # Cached pointers used directly by forward to avoid extra dict-read.
-        self._active_a: nn.Parameter | None = None
-        self._active_b: nn.Parameter | None = None
+        # Minimal execution state. This is cheaper to reason about than
+        # carrying extra active-parameter caches in the layer itself.
+        self.active_role: str = "base"
 
-    def _serve_param_keys(self, adapter_name: str) -> tuple[str, str]:
-        key = sanitize_adapter_key(adapter_name)
-        return f"{key}__a", f"{key}__b"
+    def bind_serve(self, a: nn.Parameter, b: nn.Parameter) -> None:
+        """Bind this layer to one logical adapter's serve parameters."""
 
-    def has_logical_adapter(self, adapter_name: str) -> bool:
-        """Return whether this layer already owns the given serve adapter."""
-
-        key_a, key_b = self._serve_param_keys(adapter_name)
-        return key_a in self.lora_serve_params and key_b in self.lora_serve_params
-
-    def register_logical_adapter(self, adapter_name: str, init_from: str | None = None) -> None:
-        """Create one serve adapter for this layer.
-
-        When ``init_from`` is provided, the new adapter copies serve weights
-        from the source adapter. Otherwise it uses standard LoRA init so the
-        initial delta is zero.
-        """
-
-        if self.has_logical_adapter(adapter_name):
-            return
-
-        key_a, key_b = self._serve_param_keys(adapter_name)
-        if init_from is not None and self.has_logical_adapter(init_from):
-            src = self.get_serve_weights(init_from)
-            new_a = nn.Parameter(src.a.detach().clone(), requires_grad=False)
-            new_b = nn.Parameter(src.b.detach().clone(), requires_grad=False)
-        else:
-            new_a = nn.Parameter(torch.empty(self.rank, self.in_features), requires_grad=False)
-            new_b = nn.Parameter(torch.empty(self.out_features, self.rank), requires_grad=False)
-            nn.init.kaiming_uniform_(new_a, a=math.sqrt(5))
-            nn.init.zeros_(new_b)
-        self.lora_serve_params[key_a] = new_a
-        self.lora_serve_params[key_b] = new_b
-
-    def get_serve_weights(self, adapter_name: str) -> LoRAModuleWeights:
-        """Return the serve weights for one logical adapter."""
-
-        key_a, key_b = self._serve_param_keys(adapter_name)
-        return LoRAModuleWeights(
-            a=self.lora_serve_params[key_a],
-            b=self.lora_serve_params[key_b],
-            alpha=self.alpha,
-            rank=self.rank,
-        )
+        self.serve_a = a
+        self.serve_b = b
 
     def has_train_workspace(self) -> bool:
         """Return whether this layer currently owns materialized train params."""
 
         return self.train_a is not None and self.train_b is not None
 
-    def materialize_train_from_serve(self, adapter_name: str) -> None:
-        """Create or refresh the train workspace directly from serve weights.
+    def materialize_train(self, a: nn.Parameter, b: nn.Parameter) -> None:
+        """Create or refresh the train workspace from source serve weights.
 
-        The preferred path is GPU -> GPU copy because serve adapters are already
-        expected to live on the target training device. This avoids the slower
-        CPU staging path that would otherwise introduce extra H -> D traffic.
+        The preferred path is GPU -> GPU copy because serve adapters are
+        already expected to live on the target training device.
         """
 
-        serve = self.get_serve_weights(adapter_name)
         with torch.no_grad():
-            self.train_a = nn.Parameter(serve.a.detach().clone(), requires_grad=True)
-            self.train_b = nn.Parameter(serve.b.detach().clone(), requires_grad=True)
+            self.train_a = nn.Parameter(a.detach().clone(), requires_grad=True)
+            self.train_b = nn.Parameter(b.detach().clone(), requires_grad=True)
 
     def release_train(self) -> None:
         """Drop the train workspace entirely when it is no longer needed."""
 
-        old_train_a = self.train_a
-        old_train_b = self.train_b
         self.train_a = None
         self.train_b = None
-        if self._active_a is old_train_a or self._active_b is old_train_b:
-            self._active_a = None
-            self._active_b = None
+        if self.active_role == "train":
+            self.active_role = "base"
 
-    def commit_train_to_serve(self, adapter_name: str) -> None:
-        """Publish the current train workspace back into its serve adapter."""
+    def commit_train_to_serve(self, target_a: nn.Parameter, target_b: nn.Parameter) -> None:
+        """Publish the current train workspace back into one serve target."""
 
         if self.train_a is None or self.train_b is None:
             raise RuntimeError("train workspace is not materialized")
-        serve = self.get_serve_weights(adapter_name)
         with torch.no_grad():
-            serve.a.data.copy_(self.train_a.data.to(serve.a.device))
-            serve.b.data.copy_(self.train_b.data.to(serve.b.device))
+            target_a.data.copy_(self.train_a.data.to(target_a.device))
+            target_b.data.copy_(self.train_b.data.to(target_b.device))
 
     def set_active_base(self) -> None:
         """Switch this layer into pure-base mode."""
 
-        self._active_a = None
-        self._active_b = None
+        self.active_role = "base"
 
-    def set_active_serve(self, adapter_name: str) -> None:
-        """Switch this layer into one serve adapter."""
+    def set_active_serve(self) -> None:
+        """Switch this layer into serve mode."""
 
-        serve = self.get_serve_weights(adapter_name)
-        self._active_a = serve.a
-        self._active_b = serve.b
+        if self.serve_a is None or self.serve_b is None:
+            raise RuntimeError("serve mode requested without a bound serve adapter")
+        self.active_role = "serve"
 
     def set_active_train(self) -> None:
         """Switch this layer into train-workspace mode."""
 
         if self.train_a is None or self.train_b is None:
             raise RuntimeError("train mode requested without materialized train workspace")
-        self._active_a = self.train_a
-        self._active_b = self.train_b
+        self.active_role = "train"
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply base projection and, when active, the cached LoRA delta."""
+        """Apply base projection and, when active, the current LoRA delta."""
 
         base = F.linear(x, self.weight, self.bias)
-        if self._active_a is None or self._active_b is None:
+        if self.active_role == "base":
             return base
+
+        if self.active_role == "serve":
+            if self.serve_a is None or self.serve_b is None:
+                raise RuntimeError("serve mode active without bound serve parameters")
+            a = self.serve_a
+            b = self.serve_b
+        else:
+            if self.train_a is None or self.train_b is None:
+                raise RuntimeError("train mode active without train workspace")
+            a = self.train_a
+            b = self.train_b
+
         dropped = self.dropout(x)
-        lora_down = F.linear(dropped, self._active_a, None)
-        lora_up = F.linear(lora_down, self._active_b, None)
+        lora_down = F.linear(dropped, a, None)
+        lora_up = F.linear(lora_down, b, None)
         return base + lora_up * self.scale
+
+
+def init_lora_pair(
+    *,
+    rank: int,
+    in_features: int,
+    out_features: int,
+    device: torch.device | None = None,
+    dtype: torch.dtype | None = None,
+) -> tuple[nn.Parameter, nn.Parameter]:
+    """Create one freshly initialized LoRA A/B parameter pair."""
+
+    a = nn.Parameter(
+        torch.empty(rank, in_features, device=device, dtype=dtype),
+        requires_grad=False,
+    )
+    b = nn.Parameter(
+        torch.empty(out_features, rank, device=device, dtype=dtype),
+        requires_grad=False,
+    )
+    nn.init.kaiming_uniform_(a, a=math.sqrt(5))
+    nn.init.zeros_(b)
+    return a, b
