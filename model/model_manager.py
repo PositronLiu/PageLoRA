@@ -6,14 +6,10 @@ from enum import Enum
 from typing import Iterator
 
 import torch
-from peft import LoraConfig, get_peft_model
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from core.utils import LOG, get_device, get_torch_dtype
-
-class AdapterNames(Enum):
-    POLICY = "policy"  # for training and inference
-    REFERENCE = "ref"  # for reference
+from model.lora_runtime import AdapterNames, LoRARuntime
 
 @dataclass
 class ModelConfig:
@@ -86,32 +82,27 @@ class ModelManager:
         self.model.config.use_cache = False
         self.model.gradient_checkpointing_enable()
 
-        lora_cfg = LoraConfig(
-            r=config.lora_r,
-            lora_alpha=config.lora_alpha,
-            lora_dropout=config.lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-            target_modules=list(config.target_modules),
+        self.lora_runtime = LoRARuntime(
+            self.model,
+            target_modules=config.target_modules,
+            rank=config.lora_r,
+            alpha=config.lora_alpha,
+            dropout=config.lora_dropout,
         )
-        # Create a trainable policy adapter and a frozen reference adapter.
-        self.model = get_peft_model(self.model, lora_cfg, adapter_name=AdapterNames.POLICY.value)
-        self.model.add_adapter(AdapterNames.REFERENCE.value, lora_cfg)
-        self._freeze_adapter(AdapterNames.REFERENCE.value)
-        self.model.set_adapter(AdapterNames.POLICY.value)
+        self.lora_runtime.set_active_adapter(AdapterNames.POLICY.value)
         self._enable_gradient_checkpointing_inputs()
 
         if self.cpu_offload:
-            # Move only LoRA params to GPU, keep base model on CPU
-            self._move_lora_to_gpu()
+            lora_moved = self.lora_runtime.move_all_lora_to_gpu(self.device)
             LOG(
-                f"Adapters ready (CPU offload) active={getattr(self.model, 'active_adapters', ['policy'])} "
-                f"trainable={sum(1 for p in self.model.parameters() if p.requires_grad)}"
+                f"Manual LoRA ready (CPU offload) active={self.lora_runtime.active_adapter_name} "
+                f"lora_tensors_gpu={lora_moved}"
             )
         else:
+            lora_moved = self.lora_runtime.move_all_lora_to_gpu(self.device)
             LOG(
-                f"Adapters ready active={getattr(self.model, 'active_adapters', ['policy'])} "
-                f"trainable={sum(1 for p in self.model.parameters() if p.requires_grad)}"
+                f"Manual LoRA ready active={self.lora_runtime.active_adapter_name} "
+                f"lora_tensors_gpu={lora_moved}"
             )
 
     def _enable_gradient_checkpointing_inputs(self) -> None:
@@ -139,37 +130,6 @@ class ModelManager:
         embeddings.register_forward_hook(_require_grads_hook)
         LOG("Registered embedding hook to require grads for checkpointed training")
 
-    def _move_lora_to_gpu(self) -> None:
-        """Move only LoRA parameters to GPU, keep base model on CPU.
-
-        This is the core of CPU offload: the base model stays on CPU,
-        only LoRA adapter params (lora_A, lora_B) are moved to GPU.
-        """
-        lora_moved = 0
-        for name, param in self.model.named_parameters():
-            if "lora_" in name.lower():
-                with torch.no_grad():
-                    param.data = param.data.to(self.device)
-                lora_moved += 1
-        LOG(f"Moved {lora_moved} LoRA params to GPU (base model stays on CPU)")
-
-    def _freeze_adapter(self, adapter_name: str) -> None:
-        """Freeze parameters of a specific LoRA adapter.
-
-        Args:
-            adapter_name: Adapter name.
-        Returns:
-            None.
-        """
-
-        self.model.set_adapter(adapter_name)
-        frozen = 0
-        for name, param in self.model.named_parameters():
-            if "lora" in name and adapter_name in name:
-                param.requires_grad = False
-                frozen += 1
-        LOG(f"Adapter frozen name={adapter_name} params={frozen}")
-
     def set_policy(self) -> None:
         """Activate the policy adapter.
 
@@ -178,8 +138,7 @@ class ModelManager:
         Returns:
             None.
         """
-
-        self.model.set_adapter(AdapterNames.POLICY.value)
+        self.lora_runtime.set_active_adapter(AdapterNames.POLICY.value)
         LOG("Switched active adapter to policy")
 
     def set_reference(self) -> None:
@@ -190,24 +149,18 @@ class ModelManager:
         Returns:
             None.
         """
-
-        self.model.set_adapter(AdapterNames.REFERENCE.value)
+        self.lora_runtime.set_active_adapter(AdapterNames.REFERENCE.value)
         LOG("Switched active adapter to ref")
 
     def export_policy_state(self) -> dict[str, torch.Tensor]:
         """Export the trainable policy adapter state for checkpointing."""
 
-        policy_state: dict[str, torch.Tensor] = {}
-        for name, tensor in self.model.state_dict().items():
-            if AdapterNames.POLICY.value not in name:
-                continue
-            policy_state[name] = tensor.detach().cpu()
-        return policy_state
+        return self.lora_runtime.export_policy_state()
 
     def load_policy_state(self, state_dict: dict[str, torch.Tensor]) -> None:
         """Load a previously exported policy adapter state."""
 
-        self.model.load_state_dict(state_dict, strict=False)
+        self.lora_runtime.load_policy_state(state_dict)
 
     @contextmanager
     def use_adapter(self, name: str) -> Iterator[None]:
@@ -219,15 +172,12 @@ class ModelManager:
             None.
         """
 
-        current = getattr(self.model, "active_adapter", None)
-        if current is None:
-            adapters = getattr(self.model, "active_adapters", None)
-            current = adapters[0] if adapters else AdapterNames.POLICY.value
-        self.model.set_adapter(name)
+        current = self.lora_runtime.active_adapter_name
+        self.lora_runtime.set_active_adapter(name)
         try:
             yield
         finally:
-            self.model.set_adapter(current)
+            self.lora_runtime.set_active_adapter(current)
 
     @contextmanager
     def inference_session(self, enable_cache: bool = True) -> Iterator[None]:
@@ -282,7 +232,7 @@ class ModelManager:
             Iterable of parameters.
         """
 
-        return (p for p in self.model.parameters() if p.requires_grad)
+        return self.lora_runtime.trainable_parameters()
 
     def get_inference_dispatcher(self):
         """Return a cached inference dispatcher for CPU-offloaded generation.

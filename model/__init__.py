@@ -13,7 +13,8 @@ from .generation import (
 )
 from .inference_dispatcher import InferenceDispatcher, InferenceOffloadedLayer
 from .layer_dispatcher import LayerDispatcher, OffloadedLayer
-from .model_manager import AdapterNames, ModelConfig, ModelManager
+from .lora_runtime import AdapterNames, LayerExecutionPlan, LoRAModuleWeights, LoRARuntime, ManualLoRALinear
+from .model_manager import ModelConfig, ModelManager
 
 __all__ = [
     "AdapterNames",
@@ -22,6 +23,10 @@ __all__ = [
     "InferenceDispatcher",
     "InferenceOffloadedLayer",
     "LayerDispatcher",
+    "LayerExecutionPlan",
+    "LoRAModuleWeights",
+    "LoRARuntime",
+    "ManualLoRALinear",
     "ModelConfig",
     "ModelManager",
     "OffloadedLayer",
