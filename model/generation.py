@@ -15,6 +15,7 @@ from core.constants import (
     DEFAULT_TOP_P,
 )
 from core.utils import LOG
+from model.lora_runtime import AdapterNames
 from model.model_manager import ModelManager
 
 
@@ -201,43 +202,44 @@ def _generate_batch_cpu_offload_impl(
     active_indices = list(range(len(batch_prompt_ids)))
     deadline = None if max_time is None else time.perf_counter() + max_time
 
-    with manager.inference_session(enable_cache=False):
-        with torch.no_grad():
-            for _ in range(max_new_tokens):
-                if not active_indices:
-                    break
-                if deadline is not None and time.perf_counter() >= deadline:
-                    break
+    with manager.use_adapter(AdapterNames.SERVE.value):
+        with manager.inference_session(enable_cache=False):
+            with torch.no_grad():
+                for _ in range(max_new_tokens):
+                    if not active_indices:
+                        break
+                    if deadline is not None and time.perf_counter() >= deadline:
+                        break
 
-                active_sequences = [working_sequences[index] for index in active_indices]
-                input_ids, attention_mask = _build_left_padded_batch(
-                    active_sequences,
-                    pad_token_id=pad_token_id,
-                    device=manager.device,
-                )
-                logits = dispatcher.forward_last_logits(input_ids, attention_mask=attention_mask)
-                next_tokens, next_logprobs = _sample_next_tokens(
-                    logits,
-                    token_histories=active_sequences,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    repetition_penalty=repetition_penalty,
-                )
+                    active_sequences = [working_sequences[index] for index in active_indices]
+                    input_ids, attention_mask = _build_left_padded_batch(
+                        active_sequences,
+                        pad_token_id=pad_token_id,
+                        device=manager.device,
+                    )
+                    logits = dispatcher.forward_last_logits(input_ids, attention_mask=attention_mask)
+                    next_tokens, next_logprobs = _sample_next_tokens(
+                        logits,
+                        token_histories=active_sequences,
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        repetition_penalty=repetition_penalty,
+                    )
 
-                next_active_indices: list[int] = []
-                for row, sample_index in enumerate(active_indices):
-                    token_id = next_tokens[row]
-                    working_sequences[sample_index].append(token_id)
-                    generated_ids_batch[sample_index].append(token_id)
-                    if logprobs_batch is not None:
-                        logprobs_batch[sample_index].append(float(next_logprobs[row]))
+                    next_active_indices: list[int] = []
+                    for row, sample_index in enumerate(active_indices):
+                        token_id = next_tokens[row]
+                        working_sequences[sample_index].append(token_id)
+                        generated_ids_batch[sample_index].append(token_id)
+                        if logprobs_batch is not None:
+                            logprobs_batch[sample_index].append(float(next_logprobs[row]))
 
-                    if eos_token_id is not None and token_id == eos_token_id:
-                        continue
-                    next_active_indices.append(sample_index)
+                        if eos_token_id is not None and token_id == eos_token_id:
+                            continue
+                        next_active_indices.append(sample_index)
 
-                active_indices = next_active_indices
+                    active_indices = next_active_indices
 
     dispatcher.cleanup()
     response_texts = [
@@ -299,9 +301,10 @@ def generate_with_logprobs(
 
     model.to(manager.device)
 
-    with manager.inference_session(enable_cache=True):
-        with torch.no_grad():
-            outputs = model.generate(**generation_kwargs)
+    with manager.use_adapter(AdapterNames.SERVE.value):
+        with manager.inference_session(enable_cache=True):
+            with torch.no_grad():
+                outputs = model.generate(**generation_kwargs)
 
     model.cpu()
     gc.collect()
@@ -419,9 +422,10 @@ def generate_batch(
 
     model.to(manager.device)
 
-    with manager.inference_session(enable_cache=True):
-        with torch.no_grad():
-            outputs = model.generate(**generation_kwargs)
+    with manager.use_adapter(AdapterNames.SERVE.value):
+        with manager.inference_session(enable_cache=True):
+            with torch.no_grad():
+                outputs = model.generate(**generation_kwargs)
 
     model.cpu()
     gc.collect()

@@ -9,7 +9,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from core.utils import LOG, get_device, get_torch_dtype
-from model.lora_runtime import AdapterNames, LoRARuntime
+from model.lora_runtime import AdapterNames, LoRARuntime, normalize_adapter_name
 
 @dataclass
 class ModelConfig:
@@ -89,7 +89,7 @@ class ModelManager:
             alpha=config.lora_alpha,
             dropout=config.lora_dropout,
         )
-        self.lora_runtime.set_active_adapter(AdapterNames.POLICY.value)
+        self.lora_runtime.set_active_adapter(AdapterNames.SERVE.value)
         self._enable_gradient_checkpointing_inputs()
 
         if self.cpu_offload:
@@ -130,16 +130,17 @@ class ModelManager:
         embeddings.register_forward_hook(_require_grads_hook)
         LOG("Registered embedding hook to require grads for checkpointed training")
 
-    def set_policy(self) -> None:
-        """Activate the policy adapter.
+    def set_serve(self) -> None:
+        """Activate the serve adapter used by foreground generation."""
 
-        Args:
-            None.
-        Returns:
-            None.
-        """
-        self.lora_runtime.set_active_adapter(AdapterNames.POLICY.value)
-        LOG("Switched active adapter to policy")
+        self.lora_runtime.set_active_adapter(AdapterNames.SERVE.value)
+        LOG("Switched active adapter to serve")
+
+    def set_train(self) -> None:
+        """Activate the training adapter used by background updates."""
+
+        self.lora_runtime.set_active_adapter(AdapterNames.TRAIN.value)
+        LOG("Switched active adapter to train")
 
     def set_reference(self) -> None:
         """Activate the reference adapter.
@@ -152,15 +153,41 @@ class ModelManager:
         self.lora_runtime.set_active_adapter(AdapterNames.REFERENCE.value)
         LOG("Switched active adapter to ref")
 
-    def export_policy_state(self) -> dict[str, torch.Tensor]:
-        """Export the trainable policy adapter state for checkpointing."""
+    def export_serve_state(self) -> dict[str, torch.Tensor]:
+        """Export the serve adapter state for durable checkpointing."""
 
-        return self.lora_runtime.export_policy_state()
+        return self.lora_runtime.export_serve_state()
+
+    def export_train_state(self) -> dict[str, torch.Tensor]:
+        """Export the train adapter state for training resume."""
+
+        return self.lora_runtime.export_train_state()
+
+    def load_serve_state(self, state_dict: dict[str, torch.Tensor]) -> None:
+        """Load a previously exported serve adapter state."""
+
+        self.lora_runtime.load_serve_state(state_dict)
+
+    def load_train_state(self, state_dict: dict[str, torch.Tensor]) -> None:
+        """Load a previously exported train adapter state."""
+
+        self.lora_runtime.load_train_state(state_dict)
+
+    def commit_train_to_serve(self) -> None:
+        """Publish the completed training adapter to foreground serving."""
+
+        self.lora_runtime.commit_train_to_serve()
+        LOG("Committed train adapter into serve adapter")
+
+    def export_policy_state(self) -> dict[str, torch.Tensor]:
+        """Backward-compatible alias for exporting the training adapter."""
+
+        return self.export_train_state()
 
     def load_policy_state(self, state_dict: dict[str, torch.Tensor]) -> None:
-        """Load a previously exported policy adapter state."""
+        """Backward-compatible alias for loading the training adapter."""
 
-        self.lora_runtime.load_policy_state(state_dict)
+        self.load_train_state(state_dict)
 
     @contextmanager
     def use_adapter(self, name: str) -> Iterator[None]:
@@ -173,7 +200,7 @@ class ModelManager:
         """
 
         current = self.lora_runtime.active_adapter_name
-        self.lora_runtime.set_active_adapter(name)
+        self.lora_runtime.set_active_adapter(normalize_adapter_name(name))
         try:
             yield
         finally:
@@ -233,6 +260,11 @@ class ModelManager:
         """
 
         return self.lora_runtime.trainable_parameters()
+
+    def set_policy(self) -> None:
+        """Backward-compatible alias that points to the serve adapter."""
+
+        self.set_serve()
 
     def get_inference_dispatcher(self):
         """Return a cached inference dispatcher for CPU-offloaded generation.
