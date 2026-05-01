@@ -1,17 +1,11 @@
-from .runtime import (
-    AdapterNames,
-    LayerExecutionPlan,
-    LoRAModuleWeights,
-    LoRARuntime,
-    ManualLoRALinear,
-    normalize_adapter_name,
-)
+from .linear import LoRAModuleWeights, ManualLoRALinear
+from .runtime import AdapterRole, LayerExecutionPlan, LoRARuntime, normalize_adapter_role
 
 __all__ = [
-    "AdapterNames",
+    "AdapterRole",
     "LayerExecutionPlan",
     "LoRAModuleWeights",
     "LoRARuntime",
     "ManualLoRALinear",
-    "normalize_adapter_name",
+    "normalize_adapter_role",
 ]

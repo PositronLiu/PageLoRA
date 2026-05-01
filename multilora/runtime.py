@@ -1,150 +1,36 @@
-"""Manual LoRA runtime built on top of HF base model structure.
-
-This module keeps HuggingFace as the source of model structure and checkpoint
-loading, but removes PEFT from the runtime path. Target linear modules are
-wrapped by a lightweight LoRA module that:
-
-- keeps base weights in the original linear storage
-- stores serve/train/reference LoRA weights explicitly
-- switches adapters by changing a small runtime flag
-
-This makes slot/offload logic much easier to reason about because adapter
-state is explicit and no PEFT wrapper hierarchy needs to be traversed.
-"""
+"""Global Multi-LoRA runtime lifecycle management."""
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from model.component_discovery import discover_components
+from multilora.linear import LoRAModuleWeights, ManualLoRALinear
 
 
-class AdapterNames(Enum):
+class AdapterRole(Enum):
+    """Runtime role applied during forward."""
+
+    BASE = "base"
     SERVE = "serve"
     TRAIN = "train"
-    REFERENCE = "ref"
 
 
-def normalize_adapter_name(name: str | None) -> str:
-    """Normalize public adapter aliases into the internal canonical names."""
+def normalize_adapter_role(name: str | None) -> str:
+    """Normalize public adapter-role aliases into canonical runtime names."""
 
-    if name in (None, "", AdapterNames.SERVE.value, "policy"):
-        return AdapterNames.SERVE.value
-    if name == AdapterNames.TRAIN.value:
-        return AdapterNames.TRAIN.value
-    if name == AdapterNames.REFERENCE.value:
-        return AdapterNames.REFERENCE.value
-    raise ValueError(f"Unknown adapter name: {name}")
-
-
-@dataclass
-class LoRAModuleWeights:
-    """Metadata and parameter handles for one LoRA-instrumented linear layer."""
-
-    a: nn.Parameter
-    b: nn.Parameter
-    alpha: float
-    rank: int
-
-    @property
-    def scale(self) -> float:
-        return self.alpha / self.rank
-
-
-class ManualLoRALinear(nn.Module):
-    """Linear layer with explicit serve/train/reference LoRA weights.
-
-    The base linear weight/bias remain standard parameters so existing HF
-    decoder block code continues to work. LoRA is applied with two additional
-    large tensor ops, which keeps execution efficient while avoiding PEFT
-    wrapper complexity.
-    """
-
-    def __init__(
-        self,
-        linear: nn.Linear,
-        *,
-        rank: int,
-        alpha: float,
-        dropout: float,
-    ) -> None:
-        super().__init__()
-        self.in_features = linear.in_features
-        self.out_features = linear.out_features
-        self.weight = linear.weight
-        self.bias = linear.bias
-        self.rank = rank
-        self.alpha = alpha
-        self.scale = alpha / rank
-        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
-        self.active_adapter_name = AdapterNames.SERVE.value
-
-        self.lora_serve_a = nn.Parameter(torch.empty(rank, self.in_features), requires_grad=False)
-        self.lora_serve_b = nn.Parameter(torch.empty(self.out_features, rank), requires_grad=False)
-        self.lora_train_a = nn.Parameter(torch.empty(rank, self.in_features))
-        self.lora_train_b = nn.Parameter(torch.empty(self.out_features, rank))
-        self.lora_ref_a = nn.Parameter(torch.empty(rank, self.in_features), requires_grad=False)
-        self.lora_ref_b = nn.Parameter(torch.empty(self.out_features, rank), requires_grad=False)
-
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        """Initialize LoRA weights so the initial delta is zero."""
-
-        nn.init.kaiming_uniform_(self.lora_serve_a, a=math.sqrt(5))
-        nn.init.zeros_(self.lora_serve_b)
-        with torch.no_grad():
-            self.lora_train_a.copy_(self.lora_serve_a)
-            self.lora_train_b.copy_(self.lora_serve_b)
-            self.lora_ref_a.copy_(self.lora_serve_a)
-            self.lora_ref_b.copy_(self.lora_serve_b)
-
-    def set_active_adapter(self, name: str) -> None:
-        """Switch which adapter is applied during forward."""
-
-        self.active_adapter_name = normalize_adapter_name(name)
-
-    def get_adapter_weights(self, name: str | None = None) -> LoRAModuleWeights:
-        """Return the selected adapter parameter handles."""
-
-        adapter_name = normalize_adapter_name(name or self.active_adapter_name)
-        if adapter_name == AdapterNames.REFERENCE.value:
-            return LoRAModuleWeights(
-                a=self.lora_ref_a,
-                b=self.lora_ref_b,
-                alpha=self.alpha,
-                rank=self.rank,
-            )
-        if adapter_name == AdapterNames.TRAIN.value:
-            return LoRAModuleWeights(
-                a=self.lora_train_a,
-                b=self.lora_train_b,
-                alpha=self.alpha,
-                rank=self.rank,
-            )
-        return LoRAModuleWeights(
-            a=self.lora_serve_a,
-            b=self.lora_serve_b,
-            alpha=self.alpha,
-            rank=self.rank,
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply base linear projection plus the active LoRA delta."""
-
-        base = F.linear(x, self.weight, self.bias)
-        adapter = self.get_adapter_weights()
-        dropped = self.dropout(x)
-        lora_down = F.linear(dropped, adapter.a, None)
-        lora_up = F.linear(lora_down, adapter.b, None)
-        return base + lora_up * adapter.scale
+    if name in (None, "", AdapterRole.SERVE.value, "policy"):
+        return AdapterRole.SERVE.value
+    if name in (AdapterRole.TRAIN.value,):
+        return AdapterRole.TRAIN.value
+    if name in (AdapterRole.BASE.value, "ref", "reference"):
+        return AdapterRole.BASE.value
+    raise ValueError(f"Unknown adapter role: {name}")
 
 
 @dataclass
@@ -155,7 +41,7 @@ class LayerExecutionPlan:
 
 
 class LoRARuntime:
-    """Own manual LoRA storage, adapter switching, and checkpoint I/O."""
+    """Manual Multi-LoRA storage, switching, and checkpoint I/O."""
 
     def __init__(
         self,
@@ -165,20 +51,30 @@ class LoRARuntime:
         rank: int,
         alpha: float,
         dropout: float,
+        logical_adapters: tuple[str, ...] = ("general",),
+        default_logical_adapter: str = "general",
     ) -> None:
         self.model = model
         self.target_modules = target_modules
         self.rank = rank
         self.alpha = alpha
         self.dropout = dropout
-        self.active_adapter_name = AdapterNames.SERVE.value
+        self.logical_adapter_names: list[str] = []
+        self.default_logical_adapter = default_logical_adapter
+        self.active_logical_adapter_name = default_logical_adapter
+        self.active_role = AdapterRole.SERVE.value
+        self.current_train_owner: str | None = None
 
         comps = discover_components(model)
         self.layers: list[nn.Module] = comps["layers"]
         self.layer_plans: list[LayerExecutionPlan] = []
         self._manual_modules: list[tuple[int, str, ManualLoRALinear]] = []
         self._install_wrappers()
-        self._freeze_non_train_parameters()
+        for index, adapter_name in enumerate(logical_adapters):
+            init_from = None if index == 0 else self.logical_adapter_names[0]
+            self.register_logical_adapter(adapter_name, init_from=init_from)
+        self._freeze_base_and_serve_parameters()
+        self.set_active(default_logical_adapter, AdapterRole.SERVE.value)
 
     def _install_wrappers(self) -> None:
         """Replace target linear modules in each decoder layer with manual LoRA wrappers."""
@@ -189,9 +85,7 @@ class LoRARuntime:
                 if not module_name:
                     continue
                 leaf_name = module_name.rsplit(".", 1)[-1]
-                if leaf_name not in self.target_modules:
-                    continue
-                if not isinstance(module, nn.Linear):
+                if leaf_name not in self.target_modules or not isinstance(module, nn.Linear):
                     continue
 
                 wrapper = ManualLoRALinear(
@@ -205,21 +99,14 @@ class LoRARuntime:
                 self._manual_modules.append((layer_idx, module_name, wrapper))
             self.layer_plans.append(LayerExecutionPlan(modules=wrapped_modules))
 
-    def _freeze_non_train_parameters(self) -> None:
-        """Freeze every non-train parameter in the model tree.
-
-        Without PEFT, the base model parameters would otherwise remain
-        trainable by default, which would waste gradient memory and break the
-        intended "LoRA-only update" training regime. Only the dedicated
-        training adapter should receive gradients; the serve/reference copies
-        act as published snapshots.
-        """
+    def _freeze_base_and_serve_parameters(self) -> None:
+        """Freeze base and serve parameters; train workspaces are created later."""
 
         for param in self.model.parameters():
             param.requires_grad = False
         for _, _, module in self._manual_modules:
-            module.lora_train_a.requires_grad = True
-            module.lora_train_b.requires_grad = True
+            for param in module.lora_serve_params.values():
+                param.requires_grad = False
 
     @staticmethod
     def _set_nested_module(root: nn.Module, path: str, module: nn.Module) -> None:
@@ -231,56 +118,163 @@ class LoRARuntime:
             parent = getattr(parent, attr)
         setattr(parent, parts[-1], module)
 
-    def set_active_adapter(self, name: str) -> None:
-        """Switch the active adapter for all wrapped modules."""
+    def _broadcast_active(self) -> None:
+        """Broadcast the current global active state into per-layer pointer caches."""
 
-        name = normalize_adapter_name(name)
-        self.active_adapter_name = name
+        if self.active_role == AdapterRole.BASE.value:
+            for _, _, module in self._manual_modules:
+                module.set_active_base()
+            return
+
+        if self.active_role == AdapterRole.SERVE.value:
+            adapter_name = self.active_logical_adapter_name
+            for _, _, module in self._manual_modules:
+                module.set_active_serve(adapter_name)
+            return
+
         for _, _, module in self._manual_modules:
-            module.set_active_adapter(name)
+            module.set_active_train()
+
+    def register_logical_adapter(self, adapter_name: str, init_from: str | None = None) -> None:
+        """Register one logical adapter across every wrapped layer."""
+
+        if adapter_name in self.logical_adapter_names:
+            return
+        for _, _, module in self._manual_modules:
+            module.register_logical_adapter(adapter_name, init_from=init_from)
+        self.logical_adapter_names.append(adapter_name)
+
+    def list_logical_adapters(self) -> list[str]:
+        """Return all registered logical adapter names."""
+
+        return list(self.logical_adapter_names)
+
+    def set_active(self, adapter_name: str | None, role: str) -> None:
+        """Switch the active logical adapter and runtime role."""
+
+        role = normalize_adapter_role(role)
+        if role == AdapterRole.SERVE.value:
+            adapter_name = adapter_name or self.default_logical_adapter
+            if adapter_name not in self.logical_adapter_names:
+                raise KeyError(f"Unknown logical adapter: {adapter_name}")
+            self.active_logical_adapter_name = adapter_name
+        elif role == AdapterRole.TRAIN.value:
+            if self.current_train_owner is None:
+                raise RuntimeError("train role requested without an active train workspace")
+            adapter_name = adapter_name or self.current_train_owner
+            if adapter_name != self.current_train_owner:
+                raise RuntimeError(
+                    f"train workspace belongs to {self.current_train_owner}, got request for {adapter_name}"
+                )
+            self.active_logical_adapter_name = adapter_name
+        else:
+            if adapter_name is not None:
+                self.active_logical_adapter_name = adapter_name
+
+        self.active_role = role
+        self._broadcast_active()
+
+    def set_active_adapter(self, name: str) -> None:
+        """Backward-compatible alias.
+
+        Older call sites may pass a role alias such as ``policy`` or ``ref``.
+        Newer call sites should use ``set_active(adapter_name, role)`` directly.
+        """
+
+        try:
+            role = normalize_adapter_role(name)
+        except ValueError:
+            self.set_active(name, AdapterRole.SERVE.value)
+            return
+        if role == AdapterRole.BASE.value:
+            self.set_active(None, role)
+        else:
+            self.set_active(self.default_logical_adapter, role)
+
+    def has_active_train(self) -> bool:
+        """Return whether a train workspace is currently active."""
+
+        return self.current_train_owner is not None
+
+    def active_train_owner(self) -> str | None:
+        """Return the logical adapter currently owning the train workspace."""
+
+        return self.current_train_owner
+
+    def prepare_train_workspace(self, adapter_name: str, device: torch.device | None = None) -> bool:
+        """Create or reuse the global train workspace for one logical adapter.
+
+        Returns ``True`` when the workspace was freshly materialized and callers
+        should rebuild train-time state such as the optimizer parameter list.
+        """
+
+        _ = device  # Serve parameters already live on the intended device.
+        if self.current_train_owner is not None and self.current_train_owner != adapter_name:
+            raise RuntimeError(
+                f"train workspace already belongs to {self.current_train_owner}; cannot switch to {adapter_name}"
+            )
+
+        already_materialized = all(module.has_train_workspace() for _, _, module in self._manual_modules)
+        if self.current_train_owner == adapter_name and already_materialized:
+            return False
+
+        for _, _, module in self._manual_modules:
+            module.materialize_train_from_serve(adapter_name)
+        self.current_train_owner = adapter_name
+        return True
+
+    def clear_train_workspace(self) -> None:
+        """Release train ownership after a successful publish or explicit discard."""
+
+        for _, _, module in self._manual_modules:
+            module.release_train()
+        self.current_train_owner = None
+        if self.active_role == AdapterRole.TRAIN.value:
+            self.set_active(self.default_logical_adapter, AdapterRole.SERVE.value)
 
     def trainable_parameters(self) -> Iterable[nn.Parameter]:
-        """Yield only training adapter parameters."""
+        """Yield the currently materialized train workspace parameters."""
 
         for _, _, module in self._manual_modules:
-            yield module.lora_train_a
-            yield module.lora_train_b
+            if module.train_a is not None:
+                yield module.train_a
+            if module.train_b is not None:
+                yield module.train_b
 
     def move_all_lora_to_gpu(self, device: torch.device) -> int:
-        """Move all LoRA adapter tensors to GPU."""
+        """Move serve adapters to GPU and move train only when materialized."""
 
         moved = 0
         with torch.no_grad():
             for _, _, module in self._manual_modules:
-                for param in (
-                    module.lora_serve_a,
-                    module.lora_serve_b,
-                    module.lora_train_a,
-                    module.lora_train_b,
-                    module.lora_ref_a,
-                    module.lora_ref_b,
-                ):
+                for param in module.lora_serve_params.values():
                     if param.data.device != device:
                         param.data = param.data.to(device)
                         moved += 1
+                if module.train_a is not None and module.train_a.data.device != device:
+                    module.train_a.data = module.train_a.data.to(device)
+                    moved += 1
+                if module.train_b is not None and module.train_b.data.device != device:
+                    module.train_b.data = module.train_b.data.to(device)
+                    moved += 1
         return moved
 
-    def export_adapter_state(self, name: str) -> dict[str, torch.Tensor]:
-        """Export one adapter tensor set in a compact layer/module keyed format."""
+    def export_serve_state(self, adapter_name: str) -> dict[str, torch.Tensor]:
+        """Export one logical adapter's serve state."""
 
-        name = normalize_adapter_name(name)
         state: dict[str, torch.Tensor] = {}
         for layer_idx, module_name, module in self._manual_modules:
             prefix = f"layers.{layer_idx}.{module_name}"
-            adapter = module.get_adapter_weights(name)
-            state[f"{prefix}.lora_{name}_a"] = adapter.a.detach().cpu()
-            state[f"{prefix}.lora_{name}_b"] = adapter.b.detach().cpu()
+            serve = module.get_serve_weights(adapter_name)
+            state[f"{prefix}.lora_serve_a"] = serve.a.detach().cpu()
+            state[f"{prefix}.lora_serve_b"] = serve.b.detach().cpu()
         return state
 
-    def load_adapter_state(self, name: str, state: dict[str, torch.Tensor]) -> None:
-        """Load one adapter tensor set from a compact layer/module keyed format."""
+    def load_serve_state(self, adapter_name: str, state: dict[str, torch.Tensor]) -> None:
+        """Load one logical adapter's serve state."""
 
-        name = normalize_adapter_name(name)
+        if adapter_name not in self.logical_adapter_names:
+            self.register_logical_adapter(adapter_name, init_from=self.default_logical_adapter)
         manual_map = {
             (layer_idx, module_name): module
             for layer_idx, module_name, module in self._manual_modules
@@ -296,72 +290,98 @@ class LoRARuntime:
                 module = manual_map.get((layer_idx, module_name))
                 if module is None:
                     continue
-                expected_prefix = f"lora_{name}_"
-                if not leaf_name.startswith(expected_prefix):
-                    continue
-                target = getattr(module, leaf_name, None)
-                if isinstance(target, nn.Parameter):
-                    target.data.copy_(tensor.to(target.device))
+                serve = module.get_serve_weights(adapter_name)
+                if leaf_name == "lora_serve_a":
+                    serve.a.data.copy_(tensor.to(serve.a.device))
+                elif leaf_name == "lora_serve_b":
+                    serve.b.data.copy_(tensor.to(serve.b.device))
 
-    def copy_adapter_(self, src: str, dst: str) -> None:
-        """Copy one adapter tensor set into another in-place."""
+    def export_train_state(self) -> dict[str, torch.Tensor] | None:
+        """Export the current train workspace state if it exists."""
 
-        src = normalize_adapter_name(src)
-        dst = normalize_adapter_name(dst)
-        if src == dst:
-            return
+        if self.current_train_owner is None:
+            return None
+        state: dict[str, torch.Tensor] = {}
+        for layer_idx, module_name, module in self._manual_modules:
+            if module.train_a is None or module.train_b is None:
+                return None
+            prefix = f"layers.{layer_idx}.{module_name}"
+            state[f"{prefix}.lora_train_a"] = module.train_a.detach().cpu()
+            state[f"{prefix}.lora_train_b"] = module.train_b.detach().cpu()
+        return state
+
+    def load_train_state(
+        self,
+        adapter_name: str,
+        state: dict[str, torch.Tensor],
+        device: torch.device | None = None,
+    ) -> None:
+        """Restore the train workspace for one logical adapter."""
+
+        _ = device
+        self.prepare_train_workspace(adapter_name)
+        manual_map = {
+            (layer_idx, module_name): module
+            for layer_idx, module_name, module in self._manual_modules
+        }
         with torch.no_grad():
-            for _, _, module in self._manual_modules:
-                src_weights = module.get_adapter_weights(src)
-                dst_weights = module.get_adapter_weights(dst)
-                dst_weights.a.data.copy_(src_weights.a.data)
-                dst_weights.b.data.copy_(src_weights.b.data)
+            for key, tensor in state.items():
+                parts = key.split(".")
+                if len(parts) < 4 or parts[0] != "layers":
+                    continue
+                layer_idx = int(parts[1])
+                module_name = ".".join(parts[2:-1])
+                leaf_name = parts[-1]
+                module = manual_map.get((layer_idx, module_name))
+                if module is None or module.train_a is None or module.train_b is None:
+                    continue
+                if leaf_name == "lora_train_a":
+                    module.train_a.data.copy_(tensor.to(module.train_a.device))
+                elif leaf_name == "lora_train_b":
+                    module.train_b.data.copy_(tensor.to(module.train_b.device))
+        self.current_train_owner = adapter_name
 
-    def commit_train_to_serve(self) -> None:
-        """Publish the latest completed training adapter to the serve adapter."""
+    def commit_train_to_serve(self, adapter_name: str | None = None, *, clear_train: bool = True) -> None:
+        """Publish the active train workspace into its serve adapter."""
 
-        self.copy_adapter_(AdapterNames.TRAIN.value, AdapterNames.SERVE.value)
+        owner = adapter_name or self.current_train_owner
+        if owner is None or self.current_train_owner != owner:
+            raise RuntimeError("no matching active train workspace to commit")
+        for _, _, module in self._manual_modules:
+            module.commit_train_to_serve(owner)
+        if clear_train:
+            self.clear_train_workspace()
 
-    def export_serve_state(self) -> dict[str, torch.Tensor]:
-        """Export the serve adapter state."""
-
-        return self.export_adapter_state(AdapterNames.SERVE.value)
-
-    def export_train_state(self) -> dict[str, torch.Tensor]:
-        """Export the training adapter state."""
-
-        return self.export_adapter_state(AdapterNames.TRAIN.value)
-
-    def load_serve_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Load the serve adapter state."""
-
-        self.load_adapter_state(AdapterNames.SERVE.value, state)
-
-    def load_train_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Load the training adapter state."""
-
-        self.load_adapter_state(AdapterNames.TRAIN.value, state)
-
-    def export_policy_state(self) -> dict[str, torch.Tensor]:
-        """Backward-compatible alias for the training adapter state."""
+    def export_policy_state(self) -> dict[str, torch.Tensor] | None:
+        """Backward-compatible alias for the current train state."""
 
         return self.export_train_state()
 
     def load_policy_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Backward-compatible alias for loading the training adapter state."""
+        """Backward-compatible alias using the default logical adapter."""
 
-        self.load_train_state(state)
+        self.load_train_state(self.default_logical_adapter, state)
 
     def get_layer_adapter(
         self,
         layer_idx: int,
         module_name: str,
         adapter_name: str | None = None,
+        role: str = AdapterRole.SERVE.value,
     ) -> LoRAModuleWeights | None:
-        """Return one module's LoRA weights for explicit dispatcher use."""
+        """Return one layer/module's active LoRA weights for dispatcher use."""
 
         try:
             module = self.layer_plans[layer_idx].modules[module_name]
         except (IndexError, KeyError):
             return None
-        return module.get_adapter_weights(adapter_name)
+        role = normalize_adapter_role(role)
+        if role == AdapterRole.BASE.value:
+            return None
+        if role == AdapterRole.TRAIN.value:
+            if module.train_a is None or module.train_b is None:
+                return None
+            return LoRAModuleWeights(module.train_a, module.train_b, module.alpha, module.rank)
+        if adapter_name is None:
+            raise ValueError("serve weights require a logical adapter name")
+        return module.get_serve_weights(adapter_name)

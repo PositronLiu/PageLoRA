@@ -15,7 +15,7 @@ from core.constants import (
     DEFAULT_TOP_P,
 )
 from core.utils import LOG
-from multilora import AdapterNames
+from multilora import AdapterRole
 from model.model_manager import ModelManager
 
 
@@ -162,6 +162,7 @@ def _generate_batch_cpu_offload_impl(
     manager: ModelManager,
     batch_prompt_ids: list[list[int]],
     *,
+    adapter_name: str | None,
     max_new_tokens: int,
     temperature: float,
     top_p: float,
@@ -202,7 +203,7 @@ def _generate_batch_cpu_offload_impl(
     active_indices = list(range(len(batch_prompt_ids)))
     deadline = None if max_time is None else time.perf_counter() + max_time
 
-    with manager.use_adapter(AdapterNames.SERVE.value):
+    with manager.use_adapter(adapter_name=adapter_name, role=AdapterRole.SERVE.value):
         with manager.inference_session(enable_cache=False):
             with torch.no_grad():
                 for _ in range(max_new_tokens):
@@ -258,6 +259,8 @@ def generate_with_logprobs(
     top_k: int = DEFAULT_TOP_K,
     repetition_penalty: float = 1.05,
     max_time: float | None = None,
+    *,
+    adapter_name: str | None = None,
 ) -> GenerationOutput:
     """Generate a response and compute token log-probabilities."""
 
@@ -265,6 +268,7 @@ def generate_with_logprobs(
         return generate_with_logprobs_cpu_offload(
             manager,
             prompt_ids,
+            adapter_name=adapter_name,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_p=top_p,
@@ -301,7 +305,7 @@ def generate_with_logprobs(
 
     model.to(manager.device)
 
-    with manager.use_adapter(AdapterNames.SERVE.value):
+    with manager.use_adapter(adapter_name=adapter_name, role=AdapterRole.SERVE.value):
         with manager.inference_session(enable_cache=True):
             with torch.no_grad():
                 outputs = model.generate(**generation_kwargs)
@@ -341,12 +345,15 @@ def generate_with_logprobs_cpu_offload(
     top_k: int = DEFAULT_TOP_K,
     repetition_penalty: float = 1.05,
     max_time: float | None = None,
+    *,
+    adapter_name: str | None = None,
 ) -> GenerationOutput:
     """Generate one response through the CPU-offloaded inference dispatcher."""
 
     response_ids_batch, response_texts, logprobs_batch = _generate_batch_cpu_offload_impl(
         manager,
         [prompt_ids],
+        adapter_name=adapter_name,
         max_new_tokens=max_new_tokens,
         temperature=temperature,
         top_p=top_p,
@@ -371,6 +378,8 @@ def generate_batch(
     top_k: int = DEFAULT_TOP_K,
     repetition_penalty: float = 1.05,
     max_time: float | None = None,
+    *,
+    adapter_name: str | None = None,
 ) -> BatchGenerationOutput:
     """Generate responses for a batch of prompts."""
 
@@ -378,6 +387,7 @@ def generate_batch(
         return generate_batch_cpu_offload(
             manager,
             batch_prompt_ids,
+            adapter_name=adapter_name,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_p=top_p,
@@ -422,7 +432,7 @@ def generate_batch(
 
     model.to(manager.device)
 
-    with manager.use_adapter(AdapterNames.SERVE.value):
+    with manager.use_adapter(adapter_name=adapter_name, role=AdapterRole.SERVE.value):
         with manager.inference_session(enable_cache=True):
             with torch.no_grad():
                 outputs = model.generate(**generation_kwargs)
@@ -451,12 +461,15 @@ def generate_batch_cpu_offload(
     top_k: int = DEFAULT_TOP_K,
     repetition_penalty: float = 1.05,
     max_time: float | None = None,
+    *,
+    adapter_name: str | None = None,
 ) -> BatchGenerationOutput:
     """Generate a batch through the CPU-offloaded inference dispatcher."""
 
     response_ids_batch, response_texts, _ = _generate_batch_cpu_offload_impl(
         manager,
         batch_prompt_ids,
+        adapter_name=adapter_name,
         max_new_tokens=max_new_tokens,
         temperature=temperature,
         top_p=top_p,
