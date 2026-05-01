@@ -20,7 +20,8 @@ class ModelConfig:
         lora_alpha: LoRA alpha.
         lora_dropout: LoRA dropout.
         target_modules: List of module names for LoRA.
-        cpu_offload: If True, keep base model on CPU and only move LoRA params to GPU.
+        cpu_offload: Experimental fallback path that keeps base model on CPU.
+            The default runtime path keeps the model resident on GPU.
     Returns:
         None.
     """
@@ -30,7 +31,7 @@ class ModelConfig:
     lora_alpha: int = 32
     lora_dropout: float = 0.05
     target_modules: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
-    cpu_offload: bool = True
+    cpu_offload: bool = False
     infer_cpu_offload: bool = False
     logical_adapters: tuple[str, ...] = ("general",)
     default_logical_adapter: str = "general"
@@ -63,16 +64,15 @@ class ModelManager:
         LOG("Tokenizer loaded")
 
         if self.cpu_offload:
-            # CPU offload mode: load base model to CPU first, then only move LoRA params to GPU
+            # Experimental fallback path kept for future offload experiments.
             self.model = AutoModelForCausalLM.from_pretrained(
                 config.model_name,
-                torch_dtype=torch.float32,  # Load in FP32 on CPU to save memory
+                torch_dtype=torch.float32,
                 trust_remote_code=True,
             )
-            # Base model stays on CPU - no .to(device) here
             LOG("Base model loaded on CPU (cpu_offload=True)")
         else:
-            # Normal mode: load directly to GPU
+            # Default runtime path: keep the base model resident on GPU.
             self.model = AutoModelForCausalLM.from_pretrained(
                 config.model_name,
                 dtype=dtype,
@@ -81,7 +81,8 @@ class ModelManager:
             self.model.to(self.device)
             LOG("Base model loaded")
 
-        # Training defaults keep memory stable.
+        # Training defaults keep memory stable. Inference sessions temporarily
+        # override these flags through ``inference_session``.
         self.model.config.use_cache = False
         self.model.gradient_checkpointing_enable()
 

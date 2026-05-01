@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gc
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -303,16 +302,18 @@ def generate_with_logprobs(
     if max_time is not None:
         generation_kwargs["max_time"] = max_time
 
-    model.to(manager.device)
+    if manager.config.cpu_offload:
+        model.to(manager.device)
 
     with manager.use_adapter(adapter_name=adapter_name, role=AdapterRole.SERVE.value):
         with manager.inference_session(enable_cache=True):
             with torch.no_grad():
                 outputs = model.generate(**generation_kwargs)
 
-    model.cpu()
-    gc.collect()
-    torch.cuda.empty_cache()
+    if manager.config.cpu_offload:
+        model.cpu()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     generated = outputs.sequences[0].tolist()
     response_ids = generated[len(prompt_ids):]
@@ -430,16 +431,18 @@ def generate_batch(
     if max_time is not None:
         generation_kwargs["max_time"] = max_time
 
-    model.to(manager.device)
+    if manager.config.cpu_offload:
+        model.to(manager.device)
 
     with manager.use_adapter(adapter_name=adapter_name, role=AdapterRole.SERVE.value):
         with manager.inference_session(enable_cache=True):
             with torch.no_grad():
                 outputs = model.generate(**generation_kwargs)
 
-    model.cpu()
-    gc.collect()
-    torch.cuda.empty_cache()
+    if manager.config.cpu_offload:
+        model.cpu()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     response_ids_batch: list[list[int]] = []
     response_texts: list[str] = []

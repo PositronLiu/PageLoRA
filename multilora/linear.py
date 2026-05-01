@@ -74,10 +74,12 @@ class ManualLoRALinear(nn.Module):
 
         # Optional train workspace. These parameters are materialized lazily from
         # serve weights and released after commit or explicit discard.
+        # copy from self._active_a and self._active_b when training starts, and copy back & delete when training finishes. They are never directly read by forward.
+        # these copy will introduce extra D -> D traffic, but lora adapter usually isn't large (<100M for a 7B model)
         self.train_a: nn.Parameter | None = None
         self.train_b: nn.Parameter | None = None
 
-        # Cached pointers used directly by forward.
+        # Cached pointers used directly by forward to avoid extra dict-read.
         self._active_a: nn.Parameter | None = None
         self._active_b: nn.Parameter | None = None
 
