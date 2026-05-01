@@ -13,8 +13,8 @@ from .generation import (
 )
 from .inference_dispatcher import InferenceDispatcher, InferenceOffloadedLayer
 from .layer_dispatcher import LayerDispatcher, OffloadedLayer
-from .lora_runtime import AdapterNames, LayerExecutionPlan, LoRAModuleWeights, LoRARuntime, ManualLoRALinear
 from .model_manager import ModelConfig, ModelManager
+from multilora import AdapterNames, LayerExecutionPlan, LoRAModuleWeights, LoRARuntime, ManualLoRALinear
 
 __all__ = [
     "AdapterNames",

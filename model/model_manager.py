@@ -9,7 +9,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from core.utils import LOG, get_device, get_torch_dtype
-from model.lora_runtime import AdapterNames, LoRARuntime, normalize_adapter_name
+from multilora import AdapterNames, LoRARuntime, normalize_adapter_name
 
 @dataclass
 class ModelConfig:

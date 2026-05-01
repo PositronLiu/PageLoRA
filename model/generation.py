@@ -15,7 +15,7 @@ from core.constants import (
     DEFAULT_TOP_P,
 )
 from core.utils import LOG
-from model.lora_runtime import AdapterNames
+from multilora import AdapterNames
 from model.model_manager import ModelManager
 
 
