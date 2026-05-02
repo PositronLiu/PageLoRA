@@ -9,7 +9,7 @@ from typing import Iterable
 import torch
 import torch.nn as nn
 
-from model.component_discovery import discover_components
+from model.component_discovery import discover_lora_patch_targets
 from multilora.linear import LoRAModuleWeights, ManualLoRALinear, init_lora_pair
 
 
@@ -65,8 +65,8 @@ class LoRARuntime:
         self.active_role = AdapterRole.SERVE.value
         self.current_train_owner: str | None = None
 
-        comps = discover_components(model)
-        self.layers: list[nn.Module] = comps["layers"]
+        targets = discover_lora_patch_targets(model)
+        self.layers: list[nn.Module] = targets["layers"]
         self.layer_plans: list[LayerExecutionPlan] = []
         self._manual_modules: list[tuple[int, str, ManualLoRALinear]] = []
         self._serve_registry: dict[str, dict[tuple[int, str], LoRAModuleWeights]] = {}

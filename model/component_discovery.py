@@ -1,9 +1,9 @@
-"""Shared model discovery helpers for training and inference dispatchers.
+"""Shared model structure discovery helpers.
 
-This module contains the architecture introspection pieces that are useful for
-both CPU-offloaded training and CPU-offloaded inference. Keeping them here
-lets execution-oriented modules focus on runtime semantics instead of model
-structure probing.
+The current main runtime only needs a *minimal* discovery path for manual LoRA
+patch installation. Full-component discovery is kept only for legacy /
+experimental dispatcher code paths and is no longer part of the supported main
+execution flow.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import inspect
 from typing import Optional, Set
 
 import torch.nn as nn
+from core.utils import WARNING
 
 # Candidate attribute paths for common decoder-only architectures.
 LAYER_ATTR_PATHS = [
@@ -88,8 +89,47 @@ def _resolve_peft_model(model: nn.Module) -> nn.Module:
     return model
 
 
-def discover_components(model: nn.Module) -> dict[str, object]:
-    """Discover decoder layers and surrounding components for a HF model."""
+def discover_lora_patch_targets(model: nn.Module) -> dict[str, object]:
+    """Discover only the structure needed for manual LoRA patching.
+
+    The manual LoRA runtime only needs:
+
+    - the unwrapped HF task model
+    - its config
+    - the decoder layer list
+
+    It does *not* need embedding / final_norm / lm_head / rotary discovery.
+    """
+
+    hf_model = _resolve_peft_model(model)
+    config = hf_model.config if hasattr(hf_model, "config") else None
+
+    layers = _try_paths(hf_model, LAYER_ATTR_PATHS)
+    if layers is None or not hasattr(layers, "__len__") or len(layers) == 0:
+        raise AttributeError(
+            f"Cannot find decoder layers in {type(hf_model).__name__}. "
+            f"Tried: {LAYER_ATTR_PATHS}"
+        )
+    return {
+        "layers": list(layers),
+        "config": config,
+        "hf_task_model": hf_model,
+    }
+
+
+def discover_generation_components(model: nn.Module) -> dict[str, object]:
+    """Discover the full generation component set for legacy dispatcher paths.
+
+    WARNING:
+    This path is no longer part of the supported main runtime. It is kept only
+    for old experimental code such as model offload dispatchers.
+    """
+
+    WARNING(
+        "discover_generation_components() is a legacy experimental path. "
+        "The current supported runtime no longer depends on full model "
+        "component discovery."
+    )
 
     hf_model = _resolve_peft_model(model)
     config = hf_model.config if hasattr(hf_model, "config") else None
@@ -132,6 +172,12 @@ def discover_components(model: nn.Module) -> dict[str, object]:
     }
 
 
+def discover_components(model: nn.Module) -> dict[str, object]:
+    """Backward-compatible alias for full component discovery."""
+
+    return discover_generation_components(model)
+
+
 def introspect_layer_forward(layer: nn.Module) -> Set[str]:
     """Return the set of kwargs accepted by a decoder layer forward."""
 
@@ -168,6 +214,8 @@ __all__ = [
     "LAYER_ATTR_PATHS",
     "ROTARY_ATTR_PATHS",
     "discover_components",
+    "discover_generation_components",
+    "discover_lora_patch_targets",
     "introspect_layer_forward",
     "preserve_attn_implementation",
 ]
