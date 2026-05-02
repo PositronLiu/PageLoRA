@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 
 from model.component_discovery import discover_lora_patch_targets
-from multilora.linear import LoRAModuleWeights, ManualLoRALinear, init_lora_pair
+from multilora.linear import LoRAModuleWeights, LoRALinear, init_lora_pair
 
 
 class AdapterRole(Enum):
@@ -37,7 +37,7 @@ def normalize_adapter_role(name: str | None) -> str:
 class LayerExecutionPlan:
     """Execution metadata for one decoder block."""
 
-    modules: dict[str, ManualLoRALinear]
+    modules: dict[str, LoRALinear]
 
 
 class LoRARuntime:
@@ -68,7 +68,7 @@ class LoRARuntime:
         targets = discover_lora_patch_targets(model)
         self.layers: list[nn.Module] = targets["layers"]
         self.layer_plans: list[LayerExecutionPlan] = []
-        self._manual_modules: list[tuple[int, str, ManualLoRALinear]] = []
+        self._manual_modules: list[tuple[int, str, LoRALinear]] = []
         self._serve_registry: dict[str, dict[tuple[int, str], LoRAModuleWeights]] = {}
         self._install_wrappers()
         for index, adapter_name in enumerate(logical_adapters):
@@ -81,7 +81,7 @@ class LoRARuntime:
         """Replace target linear modules in each decoder layer with manual LoRA wrappers."""
 
         for layer_idx, layer in enumerate(self.layers):
-            wrapped_modules: dict[str, ManualLoRALinear] = {}
+            wrapped_modules: dict[str, LoRALinear] = {}
             for module_name, module in list(layer.named_modules()):
                 if not module_name:
                     continue
@@ -89,7 +89,7 @@ class LoRARuntime:
                 if leaf_name not in self.target_modules or not isinstance(module, nn.Linear):
                     continue
 
-                wrapper = ManualLoRALinear(
+                wrapper = LoRALinear(
                     module,
                     rank=self.rank,
                     alpha=self.alpha,

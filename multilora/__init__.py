@@ -1,4 +1,4 @@
-from .linear import LoRAModuleWeights, ManualLoRALinear
+from .linear import LoRAModuleWeights, LoRALinear
 from .runtime import AdapterRole, LayerExecutionPlan, LoRARuntime, normalize_adapter_role
 
 __all__ = [
@@ -6,6 +6,6 @@ __all__ = [
     "LayerExecutionPlan",
     "LoRAModuleWeights",
     "LoRARuntime",
-    "ManualLoRALinear",
+    "LoRALinear",
     "normalize_adapter_role",
 ]

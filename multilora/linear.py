@@ -1,6 +1,6 @@
 """Layer-local LoRA execution helpers.
 
-`ManualLoRALinear` intentionally stays narrow:
+`LoRALinear` intentionally stays narrow:
 
 - it owns the base linear weight/bias references
 - it owns the currently bound serve slot for this layer
@@ -41,7 +41,7 @@ class LoRAModuleWeights:
         return self.alpha / self.rank
 
 
-class ManualLoRALinear(nn.Module):
+class LoRALinear(nn.Module):
     """Single-layer LoRA execution unit.
 
     The layer only knows about:

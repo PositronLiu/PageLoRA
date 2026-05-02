@@ -16,7 +16,7 @@ from .generation import (
 from .inference_dispatcher import InferenceDispatcher, InferenceOffloadedLayer
 from .layer_dispatcher import LayerDispatcher, OffloadedLayer
 from .model_manager import ModelConfig, ModelManager
-from multilora import AdapterRole, LayerExecutionPlan, LoRAModuleWeights, LoRARuntime, ManualLoRALinear
+from multilora import AdapterRole, LayerExecutionPlan, LoRAModuleWeights, LoRARuntime, LoRALinear
 
 __all__ = [
     "AdapterRole",
@@ -28,7 +28,7 @@ __all__ = [
     "LayerExecutionPlan",
     "LoRAModuleWeights",
     "LoRARuntime",
-    "ManualLoRALinear",
+    "LoRALinear",
     "ModelConfig",
     "ModelManager",
     "OffloadedLayer",
