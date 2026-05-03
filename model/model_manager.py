@@ -8,7 +8,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from core.utils import LOG, get_device, get_torch_dtype
-from multilora import AdapterRole, LoRARuntime, normalize_adapter_role
+from multilora.runtime import AdapterRole, LoRARuntime, normalize_adapter_role
 
 @dataclass
 class ModelConfig:
