@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from core.utils import WARNING
 from multilora.router import BaseRouter, RouterDecision
 
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[\u4e00-\u9fff]+|\d+")
@@ -28,6 +30,8 @@ class ClassifierRouterArtifact:
     total_tokens: dict[str, int]
     token_counts: dict[str, dict[str, int]]
     vocabulary: list[str] = field(default_factory=list)
+    artifact_version: int = 2
+    updated_at: float = 0.0
 
 
 class ClassifierRouter(BaseRouter):
@@ -55,6 +59,115 @@ class ClassifierRouter(BaseRouter):
         self.vocabulary = set(artifact.vocabulary)
         self.vocab_size = max(1, len(self.vocabulary))
         self.confidence_threshold = confidence_threshold
+
+    @classmethod
+    def empty(
+        cls,
+        *,
+        general_adapter: str,
+        confidence_threshold: float,
+    ) -> "ClassifierRouter":
+        """Create an empty incremental classifier."""
+
+        artifact = ClassifierRouterArtifact(
+            general_adapter=general_adapter,
+            labels=[],
+            trained_samples=0,
+            doc_counts={},
+            total_tokens={},
+            token_counts={},
+            vocabulary=[],
+            updated_at=time.time(),
+        )
+        return cls(artifact, confidence_threshold=confidence_threshold)
+
+    @classmethod
+    def from_artifact(
+        cls,
+        artifact: ClassifierRouterArtifact,
+        *,
+        confidence_threshold: float,
+    ) -> "ClassifierRouter":
+        """Restore a classifier from a persisted artifact."""
+
+        return cls(artifact, confidence_threshold=confidence_threshold)
+
+    def to_artifact(self) -> ClassifierRouterArtifact:
+        """Export the current classifier state for persistence."""
+
+        return ClassifierRouterArtifact(
+            general_adapter=self.general_adapter,
+            labels=list(self.labels),
+            trained_samples=self.trained_samples,
+            doc_counts=dict(self.doc_counts),
+            total_tokens=dict(self.total_tokens),
+            token_counts={
+                label: dict(counts)
+                for label, counts in self.token_counts.items()
+            },
+            vocabulary=sorted(self.vocabulary),
+            updated_at=time.time(),
+        )
+
+    def clone(self) -> "ClassifierRouter":
+        """Return a detached copy that can be trained off the foreground path."""
+
+        return ClassifierRouter.from_artifact(
+            self.to_artifact(),
+            confidence_threshold=self.confidence_threshold,
+        )
+
+    @classmethod
+    def load(cls, path: str | Path, *, confidence_threshold: float) -> "ClassifierRouter":
+        """Load one persisted classifier router artifact."""
+
+        with Path(path).open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        payload.setdefault("artifact_version", 1)
+        payload.setdefault("updated_at", 0.0)
+        artifact = ClassifierRouterArtifact(**payload)
+        return cls.from_artifact(artifact, confidence_threshold=confidence_threshold)
+
+    def save(self, path: str | Path) -> None:
+        """Persist the current classifier router artifact."""
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(asdict(self.to_artifact()), handle, ensure_ascii=False, indent=2, sort_keys=True)
+
+    def train_one(self, text: str, label: str) -> bool:
+        """Incrementally absorb one labeled router example."""
+
+        label = label.strip()
+        if not label:
+            return False
+        tokens = tokenize_router_text(text)
+        if label not in self.doc_counts:
+            self.labels.append(label)
+            self.labels.sort()
+            self.doc_counts[label] = 0
+            self.total_tokens[label] = 0
+            self.token_counts[label] = {}
+
+        self.doc_counts[label] += 1
+        self.total_tokens[label] += len(tokens)
+        label_counts = self.token_counts[label]
+        for token in tokens:
+            self.vocabulary.add(token)
+            label_counts[token] = label_counts.get(token, 0) + 1
+        self.vocab_size = max(1, len(self.vocabulary))
+        self.trained_samples += 1
+        return True
+
+    def train_batch(self, labeled_texts: list[tuple[str, str]]) -> int:
+        """Incrementally absorb a batch of labeled router examples."""
+
+        trained = 0
+        for text, label in labeled_texts:
+            if self.train_one(text, label):
+                trained += 1
+        return trained
 
     def _score_label(self, tokens: list[str], label: str) -> float:
         """Return one log-probability score for a candidate label."""
@@ -119,69 +232,3 @@ class ClassifierRouter(BaseRouter):
             fallback_used=False,
         )
 
-
-def train_classifier_router(
-    *,
-    general_adapter: str,
-    labeled_texts: list[tuple[str, str]],
-    confidence_threshold: float,
-) -> ClassifierRouter | None:
-    """Fit one lightweight classifier from labeled text examples."""
-
-    labels = sorted({label for _, label in labeled_texts if label})
-    if not labels:
-        return None
-
-    doc_counts = {label: 0 for label in labels}
-    total_tokens = {label: 0 for label in labels}
-    token_counts = {label: {} for label in labels}
-    vocabulary: set[str] = set()
-
-    for text, label in labeled_texts:
-        if label not in doc_counts:
-            continue
-        tokens = tokenize_router_text(text)
-        doc_counts[label] += 1
-        total_tokens[label] += len(tokens)
-        label_counts = token_counts[label]
-        for token in tokens:
-            vocabulary.add(token)
-            label_counts[token] = label_counts.get(token, 0) + 1
-
-    artifact = ClassifierRouterArtifact(
-        general_adapter=general_adapter,
-        labels=labels,
-        trained_samples=len(labeled_texts),
-        doc_counts=doc_counts,
-        total_tokens=total_tokens,
-        token_counts=token_counts,
-        vocabulary=sorted(vocabulary),
-    )
-    return ClassifierRouter(artifact, confidence_threshold=confidence_threshold)
-
-
-def save_classifier_router(router: ClassifierRouter, path: str | Path) -> None:
-    """Persist the fitted classifier router to a JSON artifact."""
-
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    artifact = ClassifierRouterArtifact(
-        general_adapter=router.general_adapter,
-        labels=router.labels,
-        trained_samples=router.trained_samples,
-        doc_counts=router.doc_counts,
-        total_tokens=router.total_tokens,
-        token_counts=router.token_counts,
-        vocabulary=sorted(router.vocabulary),
-    )
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(asdict(artifact), handle, ensure_ascii=False, indent=2, sort_keys=True)
-
-
-def load_classifier_router(path: str | Path, *, confidence_threshold: float) -> ClassifierRouter:
-    """Load one persisted classifier router artifact."""
-
-    with Path(path).open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    artifact = ClassifierRouterArtifact(**payload)
-    return ClassifierRouter(artifact, confidence_threshold=confidence_threshold)
