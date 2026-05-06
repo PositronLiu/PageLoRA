@@ -141,11 +141,19 @@ class LoRALinear(nn.Module):
             raise RuntimeError("train mode requested without materialized train workspace")
         self.active_role = "train"
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply base projection and, when active, the current LoRA delta."""
+    def forward(self, x: torch.Tensor, *, return_lora_down: bool = False) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
+        """Apply base projection and, when active, the current LoRA delta.
+
+        When ``return_lora_down=True``, returns ``(base, lora_down)`` where
+        ``lora_down`` is the low-rank intermediate activation ``xA``. This
+        allows callers to store the decomposed KV cache and reconstruct the
+        full output later via ``base + (lora_down @ B) * scale``.
+        """
 
         base = F.linear(x, self.weight, self.bias)
         if self.active_role == "base":
+            if return_lora_down:
+                return base, None
             return base
 
         if self.active_role == "serve":
@@ -161,6 +169,8 @@ class LoRALinear(nn.Module):
 
         dropped = self.dropout(x)
         lora_down = F.linear(dropped, a, None)
+        if return_lora_down:
+            return base, lora_down
         lora_up = F.linear(lora_down, b, None)
         return base + lora_up * self.scale
 
