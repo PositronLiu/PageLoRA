@@ -22,6 +22,9 @@ class ModelConfig:
         target_modules: List of module names for LoRA.
         cpu_offload: Experimental fallback path that keeps base model on CPU.
             The default runtime path keeps the model resident on GPU.
+        kvcache_decompose: Enable B+R decomposed KV cache for multi-LoRA
+            sharing.  When enabled, a custom generation loop replaces
+            ``model.generate()``.
     Returns:
         None.
     """
@@ -33,6 +36,7 @@ class ModelConfig:
     target_modules: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
     cpu_offload: bool = False
     infer_cpu_offload: bool = False
+    kvcache_decompose: bool = False
     logical_adapters: tuple[str, ...] = ("general",)
     default_logical_adapter: str = "general"
 
@@ -111,6 +115,15 @@ class ModelManager:
                 f"lora_tensors_gpu={lora_moved}"
             )
 
+        # B+R decomposed KV cache manager (lazy-init if enabled).
+        self._kvcache_manager = None
+        if config.kvcache_decompose:
+            from model.kvcache_manager import KVCacheManager
+
+            num_layers = len(self.lora_runtime.layers)
+            self._kvcache_manager = KVCacheManager(num_layers=num_layers)
+            LOG(f"KVCacheManager initialized layers={num_layers}")
+
     def _enable_gradient_checkpointing_inputs(self) -> None:
         """Ensure checkpointed forwards still see grad-requiring inputs.
 
@@ -152,6 +165,11 @@ class ModelManager:
         """Return the default logical adapter currently selected."""
 
         return self.active_logical_adapter_name
+
+    @property
+    def kvcache_manager(self):
+        """Return the B+R decomposed KV cache manager, or ``None``."""
+        return self._kvcache_manager
 
     def set_serve(self, adapter_name: str | None = None) -> None:
         """Activate the serve adapter used by foreground generation."""

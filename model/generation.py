@@ -263,6 +263,25 @@ def generate_with_logprobs(
 ) -> GenerationOutput:
     """Generate a response and compute token log-probabilities."""
 
+    # B+R decomposed KV cache path
+    if getattr(manager.config, "kvcache_decompose", False):
+        from model.kvcache_generation import generate_with_kvcache_decomposed
+
+        resolved = adapter_name or manager.active_logical_adapter_name
+        with manager.use_adapter(adapter_name=resolved, role=AdapterRole.SERVE.value):
+            with manager.inference_session(enable_cache=False):  # cache managed externally
+                return generate_with_kvcache_decomposed(
+                    manager,
+                    prompt_ids,
+                    adapter_name=resolved,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    repetition_penalty=repetition_penalty,
+                    max_time=max_time,
+                )
+
     if getattr(manager.config, "infer_cpu_offload", False):
         return generate_with_logprobs_cpu_offload(
             manager,
