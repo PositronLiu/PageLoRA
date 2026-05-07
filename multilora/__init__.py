@@ -1,5 +1,5 @@
 from .linear import LoRAModuleWeights, LoRALinear
-from .classifier_router import ClassifierRouter, ClassifierRouterArtifact, load_classifier_router, save_classifier_router, train_classifier_router
+from .classifier_router import ClassifierRouter, ClassifierRouterArtifact
 from .manager import MultiLoRAManager
 from .router import BaseRouter, RouterDecision, RuleRouteSpec, RuleRouter, build_default_rule_router
 from .runtime import AdapterRole, LayerExecutionPlan, LoRARuntime, normalize_adapter_role
@@ -27,9 +27,6 @@ __all__ = [
     "TypeStats",
     "build_default_rule_router",
     "build_default_state",
-    "load_classifier_router",
     "normalize_tag",
     "normalize_adapter_role",
-    "save_classifier_router",
-    "train_classifier_router",
 ]

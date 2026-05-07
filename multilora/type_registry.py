@@ -7,14 +7,9 @@ from multilora.state import MultiLoRAState, TypeStats
 
 _NON_WORD_RE = re.compile(r"[^a-z0-9_]+")
 
-
 def normalize_tag(tag: str) -> str:
     """Normalize one judge-produced tag into a stable type identifier."""
-
-    normalized = tag.strip().casefold().replace("-", "_").replace(" ", "_")
-    normalized = _NON_WORD_RE.sub("_", normalized)
-    normalized = normalized.strip("_")
-    return normalized or "general"
+    return _NON_WORD_RE.sub("_", tag.strip().casefold()).strip("_") or "general"
 
 
 class TypeRegistry:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections import defaultdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, TYPE_CHECKING
 
@@ -10,9 +12,6 @@ from core.types import TrainSample, TurnRecord
 from core.utils import LOG
 from multilora.classifier_router import (
     ClassifierRouter,
-    load_classifier_router,
-    save_classifier_router,
-    train_classifier_router,
 )
 from multilora.router import BaseRouter, RouterDecision
 from multilora.state import MultiLoRAState, MultiLoRAStateStore, TypeStats
@@ -60,6 +59,35 @@ def _best_tag_from_votes(votes: list[Any]) -> tuple[str | None, float]:
     return best_tag, best_count / float(total)
 
 
+@dataclass
+class RouterSample:
+    """Lightweight pending sample used only for classifier-router training."""
+
+    text: str
+    label: str
+    reward: float
+    tag_confidence: float
+    created_at: float
+
+
+def _copy_train_sample(sample: TrainSample) -> TrainSample:
+    """Detach one TrainSample before storing or rewriting it."""
+
+    return TrainSample(
+        session_id=sample.session_id,
+        turn_id=sample.turn_id,
+        sample_type=sample.sample_type,
+        prompt_ids=list(sample.prompt_ids),
+        response_ids=list(sample.response_ids),
+        old_logprobs=list(sample.old_logprobs),
+        reward=float(sample.reward),
+        teacher_logprobs=None if sample.teacher_logprobs is None else list(sample.teacher_logprobs),
+        ref_logprobs=None if sample.ref_logprobs is None else list(sample.ref_logprobs),
+        token_mask=None if sample.token_mask is None else list(sample.token_mask),
+        meta=dict(sample.meta),
+    )
+
+
 class MultiLoRAManager:
     """Single-user Level 3 orchestration for tags, router state, and adapters.
 
@@ -100,12 +128,19 @@ class MultiLoRAManager:
         self.type_registry = TypeRegistry(self.state)
         self.router_samples_path = Path(router_samples_path)
         self.router_artifact_path = Path(router_artifact_path)
+        self.router_pending_dir = self.router_samples_path.parent / "router_pending"
+        self.adapter_pending_dir = self.router_samples_path.parent / "adapter_pending"
         self.classifier_router: ClassifierRouter | None = None
         self._router_train_inflight = False
-        self._known_router_samples = self._load_router_samples()
+        self._pending_router_by_label = self._load_router_pending()
+        self._pending_adapter_by_label = self._load_adapter_pending()
+        self._dirty_router_labels: set[str] = set()
+        self._dirty_adapter_labels: set[str] = set()
+        self._pending_flush_interval_s = 30.0
+        self._last_pending_flush_at = time.time()
         self._trainer: Trainer | None = None
         self._buffer: ReplayBuffer | None = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         # CLI thresholds override the cold-start defaults while still persisting
         # back into the state file for future restarts.
@@ -127,6 +162,8 @@ class MultiLoRAManager:
         active = self.state.active_training_type
         if active:
             self._activate_training_target_locked(active)
+            for sample in self._drain_pending_adapter_samples_locked(active):
+                self._buffer.push(sample)
 
     def route(self, text: str) -> RouterDecision:
         """Route one foreground request using the current Level 3 state."""
@@ -173,20 +210,23 @@ class MultiLoRAManager:
                 reward=reward,
                 tag_confidence=tag_confidence,
             )
-            self._append_router_sample_locked(
+            if stats.type_name == self.state.general_adapter:
+                self.state_store.save(self.state)
+                return adapter_samples
+            self._stage_router_sample_locked(
                 turn=turn,
-                tag=best_tag,
+                label=stats.type_name,
                 reward=reward,
                 tag_confidence=tag_confidence,
-                dropped_neutral=dropped_neutral,
             )
+            self._stage_adapter_samples_locked(stats.type_name, adapter_samples)
             self._maybe_activate_type_locked(stats)
             replay_samples = self._select_replay_samples_locked(
                 stats=stats,
                 turn=turn,
-                adapter_samples=adapter_samples,
             )
             self._maybe_schedule_router_train_locked()
+            self._maybe_flush_pending_samples_locked()
             self.state_store.save(self.state)
             return replay_samples
 
@@ -209,53 +249,143 @@ class MultiLoRAManager:
             return
         if not Path(artifact_path).exists():
             return
-        self.classifier_router = load_classifier_router(
+        self.classifier_router = ClassifierRouter.load(
             artifact_path,
             confidence_threshold=self.state.thresholds.min_router_confidence,
         )
         self.state.router.artifact_path = artifact_path
 
-    def _load_router_samples(self) -> list[dict[str, Any]]:
-        """Load the append-only router dataset once at startup."""
+    def _label_path(self, root: Path, label: str) -> Path:
+        """Return the pending JSONL path for one normalized label."""
 
-        if not self.router_samples_path.exists():
-            return []
-        rows: list[dict[str, Any]] = []
-        with self.router_samples_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                rows.append(json.loads(line))
-        return rows
+        return root / f"{normalize_tag(label)}.jsonl"
 
-    def _append_router_sample_locked(
+    def _load_router_pending(self) -> dict[str, list[RouterSample]]:
+        """Load unconsumed router samples grouped by label."""
+
+        pending: dict[str, list[RouterSample]] = defaultdict(list)
+        if not self.router_pending_dir.exists():
+            return pending
+        for path in self.router_pending_dir.glob("*.jsonl"):
+            label = normalize_tag(path.stem)
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    payload = json.loads(line)
+                    pending[label].append(
+                        RouterSample(
+                            text=str(payload.get("text", "")),
+                            label=normalize_tag(str(payload.get("label", label))),
+                            reward=float(payload.get("reward", 0.0)),
+                            tag_confidence=float(payload.get("tag_confidence", 0.0)),
+                            created_at=float(payload.get("created_at", 0.0)),
+                        )
+                    )
+        return pending
+
+    def _load_adapter_pending(self) -> dict[str, list[TrainSample]]:
+        """Load unconsumed adapter samples grouped by label."""
+
+        pending: dict[str, list[TrainSample]] = defaultdict(list)
+        if not self.adapter_pending_dir.exists():
+            return pending
+        for path in self.adapter_pending_dir.glob("*.jsonl"):
+            label = normalize_tag(path.stem)
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    pending[label].append(TrainSample(**json.loads(line)))
+        return pending
+
+    def _stage_router_sample_locked(
         self,
         *,
         turn: TurnRecord,
-        tag: str,
+        label: str,
         reward: float,
         tag_confidence: float,
-        dropped_neutral: int,
     ) -> None:
-        """Append one router-training example to the local JSONL dataset."""
+        """Stage one router example in memory without synchronous disk IO."""
 
-        record = {
-            "created_at": time.time(),
-            "text": _last_user_text(turn),
-            "label": tag,
-            "reward": reward,
-            "tag_confidence": tag_confidence,
-            "logical_adapter_name": turn.logical_adapter_name,
-            "router_rule": turn.router_rule,
-            "router_confidence": turn.router_confidence,
-            "router_fallback_used": turn.router_fallback_used,
-            "dropped_neutral_for_adapter": dropped_neutral > 0,
-        }
-        self._known_router_samples.append(record)
-        self.router_samples_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.router_samples_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        label = normalize_tag(label)
+        sample = RouterSample(
+            created_at=time.time(),
+            text=_last_user_text(turn),
+            label=label,
+            reward=reward,
+            tag_confidence=tag_confidence,
+        )
+        if sample.text.strip():
+            self._pending_router_by_label[label].append(sample)
+            self._dirty_router_labels.add(label)
+
+    def _stage_adapter_samples_locked(self, label: str, samples: list[TrainSample]) -> None:
+        """Stage full adapter samples until their label is trainable."""
+
+        label = normalize_tag(label)
+        if not samples:
+            return
+        self._pending_adapter_by_label[label].extend(_copy_train_sample(sample) for sample in samples)
+        self._dirty_adapter_labels.add(label)
+
+    def _write_router_pending_label_locked(self, label: str) -> None:
+        """Persist one label's unconsumed router samples."""
+
+        path = self._label_path(self.router_pending_dir, label)
+        samples = self._pending_router_by_label.get(label, [])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not samples:
+            path.unlink(missing_ok=True)
+            return
+        with path.open("w", encoding="utf-8") as handle:
+            for sample in samples:
+                handle.write(json.dumps(asdict(sample), ensure_ascii=False) + "\n")
+
+    def _write_adapter_pending_label_locked(self, label: str) -> None:
+        """Persist one label's unconsumed adapter samples."""
+
+        path = self._label_path(self.adapter_pending_dir, label)
+        samples = self._pending_adapter_by_label.get(label, [])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not samples:
+            path.unlink(missing_ok=True)
+            return
+        with path.open("w", encoding="utf-8") as handle:
+            for sample in samples:
+                handle.write(json.dumps(asdict(sample), ensure_ascii=False) + "\n")
+
+    def flush_pending_samples(self) -> None:
+        """Persist dirty pending sample buckets."""
+
+        with self._lock:
+            router_labels = tuple(self._dirty_router_labels)
+            adapter_labels = tuple(self._dirty_adapter_labels)
+            for label in router_labels:
+                self._write_router_pending_label_locked(label)
+            for label in adapter_labels:
+                self._write_adapter_pending_label_locked(label)
+            self._dirty_router_labels.difference_update(router_labels)
+            self._dirty_adapter_labels.difference_update(adapter_labels)
+            self._last_pending_flush_at = time.time()
+
+    def _maybe_flush_pending_samples_locked(self) -> None:
+        """Flush pending samples at a coarse interval to avoid per-sample IO."""
+
+        if time.time() - self._last_pending_flush_at < self._pending_flush_interval_s:
+            return
+        router_labels = tuple(self._dirty_router_labels)
+        adapter_labels = tuple(self._dirty_adapter_labels)
+        for label in router_labels:
+            self._write_router_pending_label_locked(label)
+        for label in adapter_labels:
+            self._write_adapter_pending_label_locked(label)
+        self._dirty_router_labels.difference_update(router_labels)
+        self._dirty_adapter_labels.difference_update(adapter_labels)
+        self._last_pending_flush_at = time.time()
 
     def _maybe_activate_type_locked(self, stats: TypeStats) -> None:
         """Create and select a new train target once a type becomes active."""
@@ -291,87 +421,97 @@ class MultiLoRAManager:
         *,
         stats: TypeStats,
         turn: TurnRecord,
-        adapter_samples: list[TrainSample],
     ) -> list[TrainSample]:
         """Choose which samples should enter the single replay buffer.
 
-        Before any specialized adapter becomes active, samples keep training the
-        general adapter. Once one active train target exists, only samples for
-        that target continue into replay, and they are rewritten to that
-        adapter name.
+        Collecting types remain pending-only. Only the active training target
+        drains staged samples into replay.
         """
 
-        if not adapter_samples:
-            return []
         active_type = self.state.active_training_type
-        if active_type is None:
-            return adapter_samples
-        if active_type != stats.type_name:
+        if active_type is None or active_type != stats.type_name:
+            return []
+        return self._drain_pending_adapter_samples_locked(
+            stats.type_name,
+            tag_confidence=turn.judge_tag_confidence,
+        )
+
+    def _drain_pending_adapter_samples_locked(
+        self,
+        type_name: str,
+        *,
+        tag_confidence: float | None = None,
+    ) -> list[TrainSample]:
+        """Move one label's pending adapter samples into replay-ready form."""
+
+        stats = self.state.types.get(type_name)
+        if stats is None:
             return []
         adapter_name = stats.adapter_name or stats.type_name
+        pending = self._pending_adapter_by_label.pop(stats.type_name, [])
+        if not pending:
+            return []
+        self._dirty_adapter_labels.add(stats.type_name)
         routed_samples: list[TrainSample] = []
-        for sample in adapter_samples:
-            routed_sample = TrainSample(
-                session_id=sample.session_id,
-                turn_id=sample.turn_id,
-                sample_type=sample.sample_type,
-                prompt_ids=list(sample.prompt_ids),
-                response_ids=list(sample.response_ids),
-                old_logprobs=list(sample.old_logprobs),
-                reward=float(sample.reward),
-                teacher_logprobs=None if sample.teacher_logprobs is None else list(sample.teacher_logprobs),
-                ref_logprobs=None if sample.ref_logprobs is None else list(sample.ref_logprobs),
-                token_mask=None if sample.token_mask is None else list(sample.token_mask),
-                meta=dict(sample.meta),
-            )
+        for sample in pending:
+            routed_sample = _copy_train_sample(sample)
             routed_sample.meta["logical_adapter_name"] = adapter_name
             routed_sample.meta["judge_tag"] = stats.type_name
-            routed_sample.meta["judge_tag_confidence"] = turn.judge_tag_confidence
+            if tag_confidence is not None:
+                routed_sample.meta["judge_tag_confidence"] = tag_confidence
             routed_samples.append(routed_sample)
         return routed_samples
 
-    def _router_training_examples_locked(self) -> list[tuple[str, str]]:
-        """Build the labeled dataset currently eligible for classifier fitting."""
+    def _pop_router_training_examples_locked(self) -> list[RouterSample]:
+        """Pop currently trainable pending router samples."""
 
         labels = set(self.type_registry.labels_for_router())
-        examples: list[tuple[str, str]] = []
-        for record in self._known_router_samples:
-            label = record.get("label")
-            text = record.get("text")
-            if not isinstance(label, str) or not isinstance(text, str):
+        examples: list[RouterSample] = []
+        for label in sorted(labels):
+            samples = self._pending_router_by_label.pop(label, [])
+            if not samples:
                 continue
-            if label not in labels:
-                continue
-            if not text.strip():
-                continue
-            examples.append((text, label))
+            examples.extend(samples)
+            self._dirty_router_labels.add(label)
         return examples
 
+    def _restore_router_training_examples_locked(self, examples: list[RouterSample]) -> None:
+        """Put router examples back when background training fails."""
+
+        for sample in examples:
+            label = normalize_tag(sample.label)
+            self._pending_router_by_label[label].append(sample)
+            self._dirty_router_labels.add(label)
+
     def _maybe_schedule_router_train_locked(self) -> None:
-        """Submit one lightweight CPU classifier fit when enough data exists."""
+        """Submit one incremental CPU classifier update when enough data exists."""
 
         if self._router_train_inflight:
             return
-        examples = self._router_training_examples_locked()
+        examples = self._pop_router_training_examples_locked()
         if len(examples) < self.state.thresholds.min_router_train_samples:
+            self._restore_router_training_examples_locked(examples)
             return
 
-        general_adapter = self.state.general_adapter
         artifact_path = str(self.router_artifact_path)
-        confidence_threshold = self.state.thresholds.min_router_confidence
+        if self.classifier_router is None:
+            router_snapshot = ClassifierRouter.empty(
+                general_adapter=self.state.general_adapter,
+                confidence_threshold=self.state.thresholds.min_router_confidence,
+            )
+        else:
+            router_snapshot = self.classifier_router.clone()
         self._router_train_inflight = True
 
         def action() -> dict[str, Any] | None:
-            router = train_classifier_router(
-                general_adapter=general_adapter,
-                labeled_texts=examples,
-                confidence_threshold=confidence_threshold,
-            )
-            if router is None:
+            router = router_snapshot
+            trained = router.train_batch([(sample.text, sample.label) for sample in examples])
+            if trained <= 0:
                 return None
-            save_classifier_router(router, artifact_path)
+            router.save(artifact_path)
             return {
-                "trained_samples": len(examples),
+                "trained_delta": trained,
+                "trained_samples": router.trained_samples,
                 "artifact_path": artifact_path,
                 "router": router,
             }
@@ -380,9 +520,13 @@ class MultiLoRAManager:
             self._router_train_inflight = False
             result = task.result
             if not isinstance(result, dict):
+                with self._lock:
+                    self._restore_router_training_examples_locked(examples)
                 return
             router = result.get("router")
             if not isinstance(router, ClassifierRouter):
+                with self._lock:
+                    self._restore_router_training_examples_locked(examples)
                 return
             with self._lock:
                 self.classifier_router = router
@@ -392,9 +536,14 @@ class MultiLoRAManager:
                 self.state.router.last_trained_at = time.time()
                 self.state.router.trained_samples = int(result["trained_samples"])
                 self.state.router.label_space = self.type_registry.labels_for_router()
+                consumed_labels = {sample.label for sample in examples}
+                for label in consumed_labels:
+                    self._write_router_pending_label_locked(label)
+                    self._dirty_router_labels.discard(label)
                 self.state_store.save(self.state)
             LOG(
-                f"MultiLoRA router trained samples={result['trained_samples']} "
+                f"MultiLoRA router trained delta={result['trained_delta']} "
+                f"total={result['trained_samples']} "
                 f"labels={len(router.labels)}"
             )
 
