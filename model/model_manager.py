@@ -39,6 +39,8 @@ class ModelConfig:
     kvcache_decompose: bool = False
     logical_adapters: tuple[str, ...] = ("general",)
     default_logical_adapter: str = "general"
+    adapter_offload: bool = False
+    adapter_offload_lru_size: int = 1
 
 
 class ModelManager:
@@ -98,22 +100,18 @@ class ModelManager:
             dropout=config.lora_dropout,
             logical_adapters=config.logical_adapters,
             default_logical_adapter=config.default_logical_adapter,
+            adapter_offload=config.adapter_offload,
+            adapter_offload_lru_size=config.adapter_offload_lru_size,
         )
         self.lora_runtime.set_active(self.default_logical_adapter, AdapterRole.SERVE.value)
         self._enable_gradient_checkpointing_inputs()
 
-        if self.cpu_offload:
-            lora_moved = self.lora_runtime.move_all_lora_to_gpu(self.device)
-            LOG(
-                f"Manual LoRA ready (CPU offload) active={self.lora_runtime.active_logical_adapter_name} "
-                f"lora_tensors_gpu={lora_moved}"
-            )
-        else:
-            lora_moved = self.lora_runtime.move_all_lora_to_gpu(self.device)
-            LOG(
-                f"Manual LoRA ready active={self.lora_runtime.active_logical_adapter_name} "
-                f"lora_tensors_gpu={lora_moved}"
-            )
+        lora_moved = self.lora_runtime.move_all_lora_to_gpu(self.device)
+        LOG(
+            f"Manual LoRA ready active={self.lora_runtime.active_logical_adapter_name} "
+            f"lora_tensors_gpu={lora_moved}"
+            f"{' (adapter offload)' if config.adapter_offload else ''}"
+        )
 
         # B+R decomposed KV cache manager (lazy-init if enabled).
         self._kvcache_manager = None

@@ -53,6 +53,8 @@ class LoRARuntime:
         dropout: float,
         logical_adapters: tuple[str, ...] = ("general",),
         default_logical_adapter: str = "general",
+        adapter_offload: bool = False,
+        adapter_offload_lru_size: int = 1,
     ) -> None:
         self.model = model
         self.target_modules = target_modules
@@ -64,6 +66,11 @@ class LoRARuntime:
         self.active_logical_adapter_name = default_logical_adapter
         self.active_role = AdapterRole.SERVE.value
         self.current_train_owner: str | None = None
+
+        self._adapter_offload = adapter_offload
+        self._adapter_offload_lru_size = adapter_offload_lru_size
+        self._device: torch.device | None = None
+        self._gpu_resident_adapters: list[str] = []
 
         targets = discover_lora_patch_targets(model)
         self.layers: list[nn.Module] = targets["layers"]
@@ -130,15 +137,66 @@ class LoRARuntime:
 
         if self.active_role == AdapterRole.SERVE.value:
             adapter_name = self.active_logical_adapter_name
+
+            if self._adapter_offload and self._device is not None:
+                self.ensure_adapter_on_gpu(adapter_name, self._device)
+
             adapter_layers = self._serve_registry[adapter_name]
             for layer_idx, module_name, module in self._manual_modules:
                 weights = adapter_layers[(layer_idx, module_name)]
                 module.bind_serve(weights.a, weights.b)
                 module.set_active_serve()
+
+            if self._adapter_offload:
+                self._maybe_offload_inactive()
             return
 
         for _, _, module in self._manual_modules:
             module.set_active_train()
+
+    # ── adapter offload ──────────────────────────────────────────────
+
+    def ensure_adapter_on_gpu(self, adapter_name: str, device: torch.device) -> None:
+        """Move one adapter's serve weights to *device* and track as GPU-resident."""
+
+        if adapter_name not in self._serve_registry:
+            return
+        with torch.no_grad():
+            for weights in self._serve_registry[adapter_name].values():
+                if weights.a.data.device != device:
+                    weights.a.data = weights.a.data.to(device)
+                if weights.b.data.device != device:
+                    weights.b.data = weights.b.data.to(device)
+        if adapter_name in self._gpu_resident_adapters:
+            self._gpu_resident_adapters.remove(adapter_name)
+        self._gpu_resident_adapters.append(adapter_name)
+
+    def offload_adapter_to_cpu(self, adapter_name: str) -> None:
+        """Move one adapter's serve weights to CPU and remove from GPU set."""
+
+        if adapter_name not in self._serve_registry:
+            return
+        with torch.no_grad():
+            for weights in self._serve_registry[adapter_name].values():
+                if weights.a.data.device.type != "cpu":
+                    weights.a.data = weights.a.data.cpu()
+                if weights.b.data.device.type != "cpu":
+                    weights.b.data = weights.b.data.cpu()
+        if adapter_name in self._gpu_resident_adapters:
+            self._gpu_resident_adapters.remove(adapter_name)
+
+    def _maybe_offload_inactive(self) -> None:
+        """Evict LRU adapters beyond the active + LRU budget."""
+
+        if not self._adapter_offload or self._device is None:
+            return
+        max_resident = 1 + self._adapter_offload_lru_size
+        inactive = [a for a in self._gpu_resident_adapters
+                     if a != self.active_logical_adapter_name]
+        while len(self._gpu_resident_adapters) > max_resident and inactive:
+            adapter = inactive.pop(0)  # oldest inactive
+            self._gpu_resident_adapters.remove(adapter)
+            self.offload_adapter_to_cpu(adapter)
 
     def register_logical_adapter(self, adapter_name: str, init_from: str | None = None) -> None:
         """Register one logical adapter across every wrapped layer."""
@@ -169,6 +227,9 @@ class LoRARuntime:
 
         self._serve_registry[adapter_name] = adapter_layers
         self.logical_adapter_names.append(adapter_name)
+
+        if self._adapter_offload and self._device is not None and adapter_name != self.active_logical_adapter_name:
+            self.offload_adapter_to_cpu(adapter_name)
 
     def list_logical_adapters(self) -> list[str]:
         """Return all registered logical adapter names."""
@@ -233,7 +294,6 @@ class LoRARuntime:
         should rebuild train-time state such as the optimizer parameter list.
         """
 
-        _ = device
         if self.current_train_owner is not None and self.current_train_owner != adapter_name:
             raise RuntimeError(
                 f"train workspace already belongs to {self.current_train_owner}; cannot switch to {adapter_name}"
@@ -242,6 +302,9 @@ class LoRARuntime:
         already_materialized = all(module.has_train_workspace() for _, _, module in self._manual_modules)
         if self.current_train_owner == adapter_name and already_materialized:
             return False
+
+        if self._adapter_offload and device is not None:
+            self.ensure_adapter_on_gpu(adapter_name, device)
 
         adapter_layers = self._serve_registry[adapter_name]
         for layer_idx, module_name, module in self._manual_modules:
@@ -269,18 +332,37 @@ class LoRARuntime:
                 yield module.train_b
 
     def move_all_lora_to_gpu(self, device: torch.device) -> int:
-        """Move serve adapters to GPU and move train only when materialized."""
+        """Move serve adapters to GPU and move train only when materialized.
 
+        When ``adapter_offload`` is enabled, only the active adapter (and
+        adapters already in the GPU-resident LRU pool) are moved.  Otherwise
+        all registered adapters are moved (original behaviour).
+        """
+        self._device = device
         moved = 0
         with torch.no_grad():
-            for adapter_layers in self._serve_registry.values():
-                for weights in adapter_layers.values():
-                    if weights.a.data.device != device:
-                        weights.a.data = weights.a.data.to(device)
-                        moved += 1
-                    if weights.b.data.device != device:
-                        weights.b.data = weights.b.data.to(device)
-                        moved += 1
+            if self._adapter_offload:
+                adapters_to_move = set(self._gpu_resident_adapters)
+                adapters_to_move.add(self.active_logical_adapter_name)
+                for adapter_name in adapters_to_move:
+                    if adapter_name not in self._serve_registry:
+                        continue
+                    for weights in self._serve_registry[adapter_name].values():
+                        if weights.a.data.device != device:
+                            weights.a.data = weights.a.data.to(device)
+                            moved += 1
+                        if weights.b.data.device != device:
+                            weights.b.data = weights.b.data.to(device)
+                            moved += 1
+            else:
+                for adapter_layers in self._serve_registry.values():
+                    for weights in adapter_layers.values():
+                        if weights.a.data.device != device:
+                            weights.a.data = weights.a.data.to(device)
+                            moved += 1
+                        if weights.b.data.device != device:
+                            weights.b.data = weights.b.data.to(device)
+                            moved += 1
             for _, _, module in self._manual_modules:
                 if module.train_a is not None and module.train_a.data.device != device:
                     module.train_a.data = module.train_a.data.to(device)
@@ -288,6 +370,19 @@ class LoRARuntime:
                 if module.train_b is not None and module.train_b.data.device != device:
                     module.train_b.data = module.train_b.data.to(device)
                     moved += 1
+
+        if self._adapter_offload:
+            self._gpu_resident_adapters.clear()
+            for adapter_name in self.logical_adapter_names:
+                if adapter_name not in self._serve_registry:
+                    continue
+                first_weights = next(iter(self._serve_registry[adapter_name].values()))
+                if first_weights.a.data.device == device:
+                    self._gpu_resident_adapters.append(adapter_name)
+            # Offload any adapters that exceed the resident budget.
+            # During init all adapters are created on the base model's
+            # device; this call forces inactive extras to CPU.
+            self._maybe_offload_inactive()
         return moved
 
     def export_serve_state(self, adapter_name: str) -> dict[str, torch.Tensor]:
