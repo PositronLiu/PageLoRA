@@ -71,6 +71,7 @@ class LoRARuntime:
         self._adapter_offload_lru_size = adapter_offload_lru_size
         self._device: torch.device | None = None
         self._gpu_resident_adapters: list[str] = []
+        self._kvcache_manager: object | None = None
 
         targets = discover_lora_patch_targets(model)
         self.layers: list[nn.Module] = targets["layers"]
@@ -171,6 +172,9 @@ class LoRARuntime:
             self._gpu_resident_adapters.remove(adapter_name)
         self._gpu_resident_adapters.append(adapter_name)
 
+        if self._kvcache_manager is not None:
+            self._kvcache_manager.ensure_residual_on_device(adapter_name, device)
+
     def offload_adapter_to_cpu(self, adapter_name: str) -> None:
         """Move one adapter's serve weights to CPU and remove from GPU set."""
 
@@ -184,6 +188,9 @@ class LoRARuntime:
                     weights.b.data = weights.b.data.cpu()
         if adapter_name in self._gpu_resident_adapters:
             self._gpu_resident_adapters.remove(adapter_name)
+
+        if self._kvcache_manager is not None:
+            self._kvcache_manager.offload_residual(adapter_name)
 
     def _maybe_offload_inactive(self) -> None:
         """Evict LRU adapters beyond the active + LRU budget."""
@@ -235,6 +242,12 @@ class LoRARuntime:
         """Return all registered logical adapter names."""
 
         return list(self.logical_adapter_names)
+
+    def set_kvcache_manager(self, mgr: object) -> None:
+        """Bind the B+R ``KVCacheManager`` so adapter offload can
+        co-manage residual caches alongside adapter weights."""
+
+        self._kvcache_manager = mgr
 
     def set_active(self, adapter_name: str | None, role: str) -> None:
         """Switch the active logical adapter and runtime role."""

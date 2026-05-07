@@ -120,6 +120,7 @@ class ModelManager:
 
             num_layers = len(self.lora_runtime.layers)
             self._kvcache_manager = KVCacheManager(num_layers=num_layers)
+            self.lora_runtime.set_kvcache_manager(self._kvcache_manager)
             LOG(f"KVCacheManager initialized layers={num_layers}")
 
     def _enable_gradient_checkpointing_inputs(self) -> None:
