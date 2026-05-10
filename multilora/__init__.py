@@ -1,5 +1,6 @@
 from .linear import LoRAModuleWeights, LoRALinear
 from .classifier_router import ClassifierRouter, ClassifierRouterArtifact
+from .disabled import DisabledMultiLoRAManager
 from .manager import MultiLoRAManager
 from .router import BaseRouter, RouterDecision, RuleRouteSpec, RuleRouter, build_default_rule_router
 from .runtime import AdapterRole, LayerExecutionPlan, LoRARuntime, normalize_adapter_role
@@ -11,6 +12,7 @@ __all__ = [
     "BaseRouter",
     "ClassifierRouter",
     "ClassifierRouterArtifact",
+    "DisabledMultiLoRAManager",
     "LayerExecutionPlan",
     "LoRAModuleWeights",
     "LoRARuntime",

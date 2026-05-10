@@ -36,6 +36,7 @@ class ModelConfig:
     target_modules: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
     cpu_offload: bool = False
     infer_cpu_offload: bool = False
+    enable_multilora: bool = False
     kvcache_decompose: bool = False
     logical_adapters: tuple[str, ...] = ("general",)
     default_logical_adapter: str = "general"
@@ -61,7 +62,11 @@ class ModelManager:
         self.default_logical_adapter = config.default_logical_adapter
         self.active_logical_adapter_name = config.default_logical_adapter
         dtype = get_torch_dtype()
-        LOG(f"ModelManager init model={config.model_name} device={self.device} dtype={dtype} cpu_offload={self.cpu_offload}")
+        LOG(
+            f"ModelManager init model={config.model_name} device={self.device} dtype={dtype} "
+            f"cpu_offload={self.cpu_offload} enable_multilora={config.enable_multilora} "
+            f"kvcache_decompose={config.kvcache_decompose}"
+        )
 
         # Tokenizer drives prompt formatting and id conversion.
         self.tokenizer = AutoTokenizer.from_pretrained(config.model_name, trust_remote_code=True)
