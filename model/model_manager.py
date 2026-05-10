@@ -37,6 +37,8 @@ class ModelConfig:
     cpu_offload: bool = False
     infer_cpu_offload: bool = False
     enable_multilora: bool = False
+    enable_br_cache: bool = True
+    kvcache_mode: str = "hf"
     kvcache_decompose: bool = False
     logical_adapters: tuple[str, ...] = ("general",)
     default_logical_adapter: str = "general"
@@ -61,11 +63,14 @@ class ModelManager:
         self._inference_dispatcher = None
         self.default_logical_adapter = config.default_logical_adapter
         self.active_logical_adapter_name = config.default_logical_adapter
+        if config.kvcache_mode == "hf" and config.enable_multilora:
+            config.kvcache_mode = "br" if config.enable_br_cache else "full"
+            config.kvcache_decompose = config.kvcache_mode == "br"
         dtype = get_torch_dtype()
         LOG(
             f"ModelManager init model={config.model_name} device={self.device} dtype={dtype} "
             f"cpu_offload={self.cpu_offload} enable_multilora={config.enable_multilora} "
-            f"kvcache_decompose={config.kvcache_decompose}"
+            f"kvcache_mode={config.kvcache_mode} kvcache_decompose={config.kvcache_decompose}"
         )
 
         # Tokenizer drives prompt formatting and id conversion.
@@ -118,15 +123,24 @@ class ModelManager:
             f"{' (adapter offload)' if config.adapter_offload else ''}"
         )
 
-        # B+R decomposed KV cache manager (lazy-init if enabled).
+        # Managed radix KV cache manager (lazy-init if enabled).
         self._kvcache_manager = None
-        if config.kvcache_decompose:
-            from model.kvcache_manager import KVCacheManager
-
+        cache_mode = config.kvcache_mode
+        if cache_mode == "hf" and config.kvcache_decompose:
+            cache_mode = "br"
+            config.kvcache_mode = cache_mode
+        if cache_mode in {"br", "full"}:
             num_layers = len(self.lora_runtime.layers)
-            self._kvcache_manager = KVCacheManager(num_layers=num_layers)
+            if cache_mode == "br":
+                from model.br_kvcache_manager import BRKVCacheManager
+
+                self._kvcache_manager = BRKVCacheManager(num_layers=num_layers)
+            else:
+                from model.full_kvcache_manager import FullKVCacheManager
+
+                self._kvcache_manager = FullKVCacheManager(num_layers=num_layers)
             self.lora_runtime.set_kvcache_manager(self._kvcache_manager)
-            LOG(f"KVCacheManager initialized layers={num_layers}")
+            LOG(f"{type(self._kvcache_manager).__name__} initialized layers={num_layers}")
 
     def _enable_gradient_checkpointing_inputs(self) -> None:
         """Ensure checkpointed forwards still see grad-requiring inputs.
@@ -172,7 +186,7 @@ class ModelManager:
 
     @property
     def kvcache_manager(self):
-        """Return the B+R decomposed KV cache manager, or ``None``."""
+        """Return the managed radix KV cache manager, or ``None``."""
         return self._kvcache_manager
 
     def set_serve(self, adapter_name: str | None = None) -> None:
@@ -245,6 +259,8 @@ class ModelManager:
         """Load a previously exported serve adapter state."""
 
         self.lora_runtime.load_serve_state(adapter_name, state_dict)
+        if self._kvcache_manager is not None:
+            self._kvcache_manager.invalidate_adapter(adapter_name)
 
     def load_train_state(self, adapter_name: str, state_dict: dict[str, torch.Tensor]) -> None:
         """Load a previously exported train adapter state."""
@@ -258,6 +274,8 @@ class ModelManager:
         self.lora_runtime.commit_train_to_serve(adapter_name)
         if adapter_name is not None:
             self.active_logical_adapter_name = adapter_name
+            if self._kvcache_manager is not None:
+                self._kvcache_manager.invalidate_adapter(adapter_name)
         LOG(f"Committed train adapter into serve adapter={adapter_name}")
 
     def export_policy_state(self) -> dict[str, torch.Tensor] | None:

@@ -173,7 +173,11 @@ class LoRARuntime:
         self._gpu_resident_adapters.append(adapter_name)
 
         if self._kvcache_manager is not None:
-            self._kvcache_manager.ensure_residual_on_device(adapter_name, device)
+            ensure_cache = getattr(self._kvcache_manager, "ensure_adapter_cache_on_device", None)
+            if callable(ensure_cache):
+                ensure_cache(adapter_name, device)
+            else:
+                self._kvcache_manager.ensure_residual_on_device(adapter_name, device)
 
     def offload_adapter_to_cpu(self, adapter_name: str) -> None:
         """Move one adapter's serve weights to CPU and remove from GPU set."""
@@ -190,7 +194,11 @@ class LoRARuntime:
             self._gpu_resident_adapters.remove(adapter_name)
 
         if self._kvcache_manager is not None:
-            self._kvcache_manager.offload_residual(adapter_name)
+            offload_cache = getattr(self._kvcache_manager, "offload_adapter_cache", None)
+            if callable(offload_cache):
+                offload_cache(adapter_name)
+            else:
+                self._kvcache_manager.offload_residual(adapter_name)
 
     def _maybe_offload_inactive(self) -> None:
         """Evict LRU adapters beyond the active + LRU budget."""
@@ -244,8 +252,7 @@ class LoRARuntime:
         return list(self.logical_adapter_names)
 
     def set_kvcache_manager(self, mgr: object) -> None:
-        """Bind the B+R ``KVCacheManager`` so adapter offload can
-        co-manage residual caches alongside adapter weights."""
+        """Bind the managed KV cache so adapter offload can move cache state."""
 
         self._kvcache_manager = mgr
 

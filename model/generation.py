@@ -263,15 +263,37 @@ def generate_with_logprobs(
 ) -> GenerationOutput:
     """Generate a response and compute token log-probabilities."""
 
-    # B+R decomposed KV cache path
-    if getattr(manager.config, "kvcache_decompose", False):
-        from model.kvcache_generation import generate_with_kvcache_decomposed
+    cache_mode = getattr(manager.config, "kvcache_mode", "hf")
+    if cache_mode == "hf" and getattr(manager.config, "kvcache_decompose", False):
+        cache_mode = "br"
+
+    if cache_mode == "br":
+        from model.br_kvcache_generation import generate_with_br_kvcache
 
         resolved = adapter_name or manager.active_logical_adapter_name
         with manager.use_adapter(adapter_name=resolved, role=AdapterRole.SERVE.value):
             with manager.inference_session(enable_cache=False):  # cache managed externally
                 with torch.no_grad():
-                    return generate_with_kvcache_decomposed(
+                    return generate_with_br_kvcache(
+                        manager,
+                        prompt_ids,
+                        adapter_name=resolved,
+                        max_new_tokens=max_new_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        repetition_penalty=repetition_penalty,
+                        max_time=max_time,
+                    )
+
+    if cache_mode == "full":
+        from model.full_kvcache_generation import generate_with_full_kvcache
+
+        resolved = adapter_name or manager.active_logical_adapter_name
+        with manager.use_adapter(adapter_name=resolved, role=AdapterRole.SERVE.value):
+            with manager.inference_session(enable_cache=False):  # cache managed externally
+                with torch.no_grad():
+                    return generate_with_full_kvcache(
                         manager,
                         prompt_ids,
                         adapter_name=resolved,
