@@ -113,3 +113,117 @@ def test_non_contiguous_key_coverage_insert_fails():
             start=3,
             spans=[KVBlockSpan(21, 0, 1)],
         )
+
+
+def test_priority_index_peeks_best_and_worst_entries():
+    cache = RadixPrefixCache()
+    key_a = FULL_KEY("a")
+    key_b = FULL_KEY("b")
+    node_a = cache.ensure_token_path([1, 2])
+    node_b = cache.ensure_token_path([3, 4])
+
+    cache.priority_index.upsert(
+        cache_key=key_a,
+        radix_node_id=node_a,
+        priority=10.0,
+        target_len=2,
+        token_ids=[1, 2],
+    )
+    cache.priority_index.upsert(
+        cache_key=key_b,
+        radix_node_id=node_b,
+        priority=1.0,
+        target_len=2,
+        token_ids=[3, 4],
+    )
+
+    assert cache.priority_index.peek_max().key == (key_a, node_a)
+    assert cache.priority_index.peek_min().key == (key_b, node_b)
+
+
+def test_priority_index_ignores_stale_heap_versions():
+    cache = RadixPrefixCache()
+    key = FULL_KEY("a")
+    node_id = cache.ensure_token_path([1, 2])
+
+    cache.priority_index.upsert(
+        cache_key=key,
+        radix_node_id=node_id,
+        priority=1.0,
+    )
+    cache.priority_index.upsert(
+        cache_key=key,
+        radix_node_id=node_id,
+        priority=9.0,
+    )
+
+    assert cache.priority_index.peek_max().priority == 9.0
+    assert cache.priority_index.peek_min().priority == 9.0
+    assert len(cache.priority_index) == 1
+
+
+def test_priority_index_reuses_same_entry_for_partial_progress():
+    cache = RadixPrefixCache()
+    key = FULL_KEY("coding")
+    node_id = cache.ensure_token_path([1, 2, 3, 4])
+    cache.priority_index.upsert(
+        cache_key=key,
+        radix_node_id=node_id,
+        priority=5.0,
+        target_len=4,
+        current_match_len=0,
+        token_ids=[1, 2, 3, 4],
+    )
+
+    cache.insert_coverage(
+        [1, 2, 3, 4],
+        key=key,
+        start=0,
+        spans=[KVBlockSpan(30, 0, 2)],
+    )
+    entry = cache.priority_index.get((key, node_id))
+    assert entry is not None
+    assert entry.active
+    assert entry.current_match_len == 2
+
+    cache.priority_index.upsert(
+        cache_key=key,
+        radix_node_id=node_id,
+        priority=3.0,
+        target_len=4,
+        current_match_len=2,
+    )
+    assert len(cache.priority_index) == 1
+
+    cache.insert_coverage(
+        [1, 2, 3, 4],
+        key=key,
+        start=2,
+        spans=[KVBlockSpan(31, 0, 2)],
+    )
+    assert entry.current_match_len == 4
+    assert not entry.active
+    assert cache.priority_index.peek_max() is None
+
+
+def test_priority_index_remove_key_and_clear_are_synchronized():
+    cache = RadixPrefixCache()
+    key = FULL_KEY("coding")
+    node_id = cache.ensure_token_path([1, 2])
+    cache.priority_index.upsert(
+        cache_key=key,
+        radix_node_id=node_id,
+        priority=2.0,
+    )
+
+    cache.remove_key(key)
+    assert cache.priority_index.get((key, node_id)) is None
+    assert len(cache.priority_index) == 0
+
+    cache.priority_index.upsert(
+        cache_key=key,
+        radix_node_id=node_id,
+        priority=2.0,
+    )
+    cache.clear()
+    assert len(cache.priority_index) == 0
