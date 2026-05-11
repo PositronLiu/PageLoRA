@@ -1,4 +1,6 @@
-from model.radix_cache import KVBlockSpan, RadixPrefixCache, span_total_length
+import pytest
+
+from model.radix_cache import FULL_KEY, KVBlockSpan, RadixPrefixCache, span_total_length
 
 
 def test_radix_lookup_partial_inside_edge():
@@ -38,3 +40,76 @@ def test_radix_residual_is_adapter_specific():
     assert match_a.residual_match_len == 3
     assert match_b.base_match_len == 3
     assert match_b.residual_match_len == 0
+
+
+def test_partial_key_coverage_does_not_split_edge():
+    cache = RadixPrefixCache()
+    general_key = FULL_KEY("general")
+    coding_key = FULL_KEY("coding")
+
+    cache.insert_coverage(
+        [1, 2, 3, 4],
+        key=general_key,
+        start=0,
+        spans=[KVBlockSpan(10, 0, 4)],
+    )
+    node_count_before = cache.node_count()
+
+    cache.insert_coverage(
+        [1, 2, 3, 4],
+        key=coding_key,
+        start=0,
+        spans=[KVBlockSpan(20, 0, 2)],
+    )
+
+    assert cache.node_count() == node_count_before
+    match = cache.lookup([1, 2, 3, 4], keys=(general_key, coding_key))
+    assert match.matched_len == 4
+    assert match.key_match_len[general_key] == 4
+    assert match.key_match_len[coding_key] == 2
+
+
+def test_partial_key_coverage_can_continue_inside_same_edge():
+    cache = RadixPrefixCache()
+    key = FULL_KEY("coding")
+    cache.ensure_token_path([1, 2, 3, 4])
+
+    cache.insert_coverage(
+        [1, 2, 3, 4],
+        key=key,
+        start=0,
+        spans=[KVBlockSpan(20, 0, 2)],
+    )
+    node_count_before = cache.node_count()
+
+    cache.insert_coverage(
+        [1, 2, 3, 4],
+        key=key,
+        start=2,
+        spans=[KVBlockSpan(21, 0, 2)],
+    )
+
+    match = cache.lookup([1, 2, 3, 4], keys=(key,))
+    assert cache.node_count() == node_count_before
+    assert match.key_match_len[key] == 4
+    assert [span.block_id for span in match.key_spans[key]] == [20, 21]
+
+
+def test_non_contiguous_key_coverage_insert_fails():
+    cache = RadixPrefixCache()
+    key = FULL_KEY("coding")
+    cache.ensure_token_path([1, 2, 3, 4])
+    cache.insert_coverage(
+        [1, 2, 3, 4],
+        key=key,
+        start=0,
+        spans=[KVBlockSpan(20, 0, 2)],
+    )
+
+    with pytest.raises(ValueError, match="non-contiguous"):
+        cache.insert_coverage(
+            [1, 2, 3, 4],
+            key=key,
+            start=3,
+            spans=[KVBlockSpan(21, 0, 1)],
+        )
