@@ -404,14 +404,19 @@ class MultiLoRAManager:
             self._activate_training_target_locked(stats.type_name)
 
     def _activate_training_target_locked(self, type_name: str) -> None:
-        """Switch the single background trainer to one chosen active type."""
+        """Switch the single background trainer to one chosen active type.
+
+        Only drains samples tagged for the new target adapter, preserving
+        samples from other adapters for multi-agent co-existence.
+        """
 
         stats = self.state.types.get(type_name)
         if stats is None:
             return
         self.state.active_training_type = type_name
         if self._buffer is not None:
-            self._buffer.clear()
+            adapter_name = stats.adapter_name or type_name
+            self._buffer.drain_by_adapter(adapter_name)
         if self._trainer is not None:
             self._trainer.set_logical_adapter_name(stats.adapter_name or type_name)
         LOG(f"MultiLoRA activated training target type={type_name}")
