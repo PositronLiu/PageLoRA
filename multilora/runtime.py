@@ -24,7 +24,7 @@ class AdapterRole(Enum):
 def normalize_adapter_role(name: str | None) -> str:
     """Normalize public adapter-role aliases into canonical runtime names."""
 
-    if name in (None, "", AdapterRole.SERVE.value, "policy"):
+    if name in (None, "", AdapterRole.SERVE.value):
         return AdapterRole.SERVE.value
     if name in (AdapterRole.TRAIN.value,):
         return AdapterRole.TRAIN.value
@@ -138,6 +138,12 @@ class LoRARuntime:
 
         if self.active_role == AdapterRole.SERVE.value:
             adapter_name = self.active_logical_adapter_name
+
+            if adapter_name not in self._serve_registry:
+                raise KeyError(
+                    f"Active adapter '{adapter_name}' not found in serve registry. "
+                    f"Registered adapters: {list(self._serve_registry.keys())}"
+                )
 
             if self._adapter_offload and self._device is not None:
                 self.ensure_adapter_on_gpu(adapter_name, self._device)
