@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -157,98 +155,6 @@ def _sample_next_tokens(
     return next_tokens.tolist(), next_token_logprobs.tolist()
 
 
-def _generate_batch_cpu_offload_impl(
-    manager: ModelManager,
-    batch_prompt_ids: list[list[int]],
-    *,
-    adapter_name: str | None,
-    max_new_tokens: int,
-    temperature: float,
-    top_p: float,
-    top_k: int,
-    repetition_penalty: float,
-    max_time: float | None,
-    return_logprobs: bool,
-) -> tuple[list[list[int]], list[str], list[list[float]] | None]:
-    """Run a batched generation loop with the inference CPU offload dispatcher.
-
-    Version 1 intentionally favors broad architecture compatibility:
-
-    - base weights are moved layer-by-layer
-    - hidden states remain on GPU during one forward
-    - each decode step recomputes the full visible sequence
-
-    This is slower than a KV-cached implementation, but it keeps the first
-    offloaded generation path simple and stable while still enabling much
-    larger models to fit on a single GPU.
-    """
-
-    if not batch_prompt_ids:
-        return [], [], [] if return_logprobs else None
-
-    tokenizer = manager.tokenizer
-    pad_token_id = tokenizer.pad_token_id
-    eos_token_id = tokenizer.eos_token_id
-    if pad_token_id is None:
-        raise ValueError("tokenizer.pad_token_id must be set for CPU-offloaded batched generation")
-
-    dispatcher = manager.get_inference_dispatcher()
-    working_sequences = [prompt_ids.copy() for prompt_ids in batch_prompt_ids]
-    generated_ids_batch: list[list[int]] = [[] for _ in batch_prompt_ids]
-    logprobs_batch: list[list[float]] | None = (
-        [[] for _ in batch_prompt_ids] if return_logprobs else None
-    )
-
-    active_indices = list(range(len(batch_prompt_ids)))
-    deadline = None if max_time is None else time.perf_counter() + max_time
-
-    with manager.use_adapter(adapter_name=adapter_name, role=AdapterRole.SERVE.value):
-        with manager.inference_session(enable_cache=False):
-            with torch.no_grad():
-                for _ in range(max_new_tokens):
-                    if not active_indices:
-                        break
-                    if deadline is not None and time.perf_counter() >= deadline:
-                        break
-
-                    active_sequences = [working_sequences[index] for index in active_indices]
-                    input_ids, attention_mask = _build_left_padded_batch(
-                        active_sequences,
-                        pad_token_id=pad_token_id,
-                        device=manager.device,
-                    )
-                    logits = dispatcher.forward_last_logits(input_ids, attention_mask=attention_mask)
-                    next_tokens, next_logprobs = _sample_next_tokens(
-                        logits,
-                        token_histories=active_sequences,
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        repetition_penalty=repetition_penalty,
-                    )
-
-                    next_active_indices: list[int] = []
-                    for row, sample_index in enumerate(active_indices):
-                        token_id = next_tokens[row]
-                        working_sequences[sample_index].append(token_id)
-                        generated_ids_batch[sample_index].append(token_id)
-                        if logprobs_batch is not None:
-                            logprobs_batch[sample_index].append(float(next_logprobs[row]))
-
-                        if eos_token_id is not None and token_id == eos_token_id:
-                            continue
-                        next_active_indices.append(sample_index)
-
-                    active_indices = next_active_indices
-
-    dispatcher.cleanup()
-    response_texts = [
-        tokenizer.decode(response_ids, skip_special_tokens=True)
-        for response_ids in generated_ids_batch
-    ]
-    return generated_ids_batch, response_texts, logprobs_batch
-
-
 def generate_with_logprobs(
     manager: ModelManager,
     prompt_ids: list[int],
@@ -304,19 +210,6 @@ def generate_with_logprobs(
                         repetition_penalty=repetition_penalty,
                         max_time=max_time,
                     )
-
-    if getattr(manager.config, "infer_cpu_offload", False):
-        return generate_with_logprobs_cpu_offload(
-            manager,
-            prompt_ids,
-            adapter_name=adapter_name,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            repetition_penalty=repetition_penalty,
-            max_time=max_time,
-        )
 
     model = manager.model
     tokenizer = manager.tokenizer
@@ -379,39 +272,6 @@ def generate_with_logprobs(
     return GenerationOutput(response_text=response_text, response_ids=response_ids, logprobs=logprobs)
 
 
-def generate_with_logprobs_cpu_offload(
-    manager: ModelManager,
-    prompt_ids: list[int],
-    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
-    temperature: float = DEFAULT_TEMPERATURE,
-    top_p: float = DEFAULT_TOP_P,
-    top_k: int = DEFAULT_TOP_K,
-    repetition_penalty: float = 1.05,
-    max_time: float | None = None,
-    *,
-    adapter_name: str | None = None,
-) -> GenerationOutput:
-    """Generate one response through the CPU-offloaded inference dispatcher."""
-
-    response_ids_batch, response_texts, logprobs_batch = _generate_batch_cpu_offload_impl(
-        manager,
-        [prompt_ids],
-        adapter_name=adapter_name,
-        max_new_tokens=max_new_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        top_k=top_k,
-        repetition_penalty=repetition_penalty,
-        max_time=max_time,
-        return_logprobs=True,
-    )
-    return GenerationOutput(
-        response_text=response_texts[0],
-        response_ids=response_ids_batch[0],
-        logprobs=logprobs_batch[0] if logprobs_batch is not None else [],
-    )
-
-
 def generate_batch(
     manager: ModelManager,
     batch_prompt_ids: list[list[int]],
@@ -425,19 +285,6 @@ def generate_batch(
     adapter_name: str | None = None,
 ) -> BatchGenerationOutput:
     """Generate responses for a batch of prompts."""
-
-    if getattr(manager.config, "infer_cpu_offload", False):
-        return generate_batch_cpu_offload(
-            manager,
-            batch_prompt_ids,
-            adapter_name=adapter_name,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            repetition_penalty=repetition_penalty,
-            max_time=max_time,
-        )
 
     if not batch_prompt_ids:
         return BatchGenerationOutput(response_texts=[], response_ids=[])
@@ -497,30 +344,3 @@ def generate_batch(
     return BatchGenerationOutput(response_texts=response_texts, response_ids=response_ids_batch)
 
 
-def generate_batch_cpu_offload(
-    manager: ModelManager,
-    batch_prompt_ids: list[list[int]],
-    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
-    temperature: float = DEFAULT_TEMPERATURE,
-    top_p: float = DEFAULT_TOP_P,
-    top_k: int = DEFAULT_TOP_K,
-    repetition_penalty: float = 1.05,
-    max_time: float | None = None,
-    *,
-    adapter_name: str | None = None,
-) -> BatchGenerationOutput:
-    """Generate a batch through the CPU-offloaded inference dispatcher."""
-
-    response_ids_batch, response_texts, _ = _generate_batch_cpu_offload_impl(
-        manager,
-        batch_prompt_ids,
-        adapter_name=adapter_name,
-        max_new_tokens=max_new_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        top_k=top_k,
-        repetition_penalty=repetition_penalty,
-        max_time=max_time,
-        return_logprobs=False,
-    )
-    return BatchGenerationOutput(response_texts=response_texts, response_ids=response_ids_batch)

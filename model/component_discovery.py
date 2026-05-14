@@ -172,12 +172,6 @@ def discover_generation_components(model: nn.Module) -> dict[str, object]:
     }
 
 
-def discover_components(model: nn.Module) -> dict[str, object]:
-    """Backward-compatible alias for full component discovery."""
-
-    return discover_generation_components(model)
-
-
 def introspect_layer_forward(layer: nn.Module) -> Set[str]:
     """Return the set of kwargs accepted by a decoder layer forward."""
 
@@ -208,12 +202,6 @@ def preserve_attn_implementation(layer: nn.Module, model_config: object) -> None
 
 
 __all__ = [
-    "EMBED_ATTR_PATHS",
-    "FINAL_NORM_PATHS",
-    "HEAD_ATTR_PATHS",
-    "LAYER_ATTR_PATHS",
-    "ROTARY_ATTR_PATHS",
-    "discover_components",
     "discover_generation_components",
     "discover_lora_patch_targets",
     "introspect_layer_forward",

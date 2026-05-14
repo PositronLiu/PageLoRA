@@ -7,7 +7,6 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from core.utils import WARNING
 from multilora.router import BaseRouter, RouterDecision
 
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[\u4e00-\u9fff]+|\d+")

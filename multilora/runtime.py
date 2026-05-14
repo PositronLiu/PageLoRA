@@ -280,23 +280,6 @@ class LoRARuntime:
         self.active_role = role
         self._broadcast_active()
 
-    def set_active_adapter(self, name: str) -> None:
-        """Backward-compatible alias.
-
-        Older call sites may pass a role alias such as ``policy`` or ``ref``.
-        Newer call sites should use ``set_active(adapter_name, role)`` directly.
-        """
-
-        try:
-            role = normalize_adapter_role(name)
-        except ValueError:
-            self.set_active(name, AdapterRole.SERVE.value)
-            return
-        if role == AdapterRole.BASE.value:
-            self.set_active(None, role)
-        else:
-            self.set_active(self.default_logical_adapter, role)
-
     def has_active_train(self) -> bool:
         """Return whether a train workspace is currently active."""
 
@@ -499,16 +482,6 @@ class LoRARuntime:
             self.clear_train_workspace()
         elif self.active_role == AdapterRole.SERVE.value and self.active_logical_adapter_name == owner:
             self._broadcast_active()
-
-    def export_policy_state(self) -> dict[str, torch.Tensor] | None:
-        """Backward-compatible alias for the current train state."""
-
-        return self.export_train_state()
-
-    def load_policy_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Backward-compatible alias using the default logical adapter."""
-
-        self.load_train_state(self.default_logical_adapter, state)
 
     def get_layer_adapter(
         self,

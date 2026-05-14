@@ -35,7 +35,6 @@ class ModelConfig:
     lora_dropout: float = 0.05
     target_modules: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
     cpu_offload: bool = False
-    infer_cpu_offload: bool = False
     enable_multilora: bool = False
     enable_br_cache: bool = True
     kvcache_mode: str = "hf"
@@ -60,7 +59,6 @@ class ModelManager:
         self.config = config
         self.device = device or get_device()
         self.cpu_offload = config.cpu_offload
-        self._inference_dispatcher = None
         self.default_logical_adapter = config.default_logical_adapter
         self.active_logical_adapter_name = config.default_logical_adapter
         if config.kvcache_mode == "hf" and config.enable_multilora:
@@ -211,11 +209,6 @@ class ModelManager:
         self.lora_runtime.set_active(None, AdapterRole.BASE.value)
         LOG("Switched active adapter to base")
 
-    def set_reference(self) -> None:
-        """Backward-compatible alias that now maps reference to the base model."""
-
-        self.set_base()
-
     def prepare_train_adapter(self, adapter_name: str | None = None) -> bool:
         """Materialize or reuse the global train workspace for one adapter.
 
@@ -277,16 +270,6 @@ class ModelManager:
             if self._kvcache_manager is not None:
                 self._kvcache_manager.invalidate_adapter(adapter_name)
         LOG(f"Committed train adapter into serve adapter={adapter_name}")
-
-    def export_policy_state(self) -> dict[str, torch.Tensor] | None:
-        """Backward-compatible alias for exporting the training adapter."""
-
-        return self.export_train_state()
-
-    def load_policy_state(self, state_dict: dict[str, torch.Tensor]) -> None:
-        """Backward-compatible alias for loading the training adapter."""
-
-        self.load_train_state(self.active_logical_adapter_name, state_dict)
 
     @contextmanager
     def use_adapter(
@@ -374,21 +357,3 @@ class ModelManager:
 
         return self.lora_runtime.trainable_parameters()
 
-    def set_policy(self) -> None:
-        """Backward-compatible alias that points to the serve adapter."""
-
-        self.set_serve()
-
-    def get_inference_dispatcher(self):
-        """Return a cached inference dispatcher for CPU-offloaded generation.
-
-        Construction is lazy because normal generation paths do not need this
-        object, and building it repeatedly would add avoidable overhead to
-        repeated foreground requests.
-        """
-
-        if self._inference_dispatcher is None:
-            from model.inference_dispatcher import InferenceDispatcher
-
-            self._inference_dispatcher = InferenceDispatcher(self.model, self.device, self.lora_runtime)
-        return self._inference_dispatcher
