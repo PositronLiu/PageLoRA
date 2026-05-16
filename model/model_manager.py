@@ -10,6 +10,18 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from core.utils import LOG, get_device, get_torch_dtype
 from multilora.runtime import AdapterRole, LoRARuntime, normalize_adapter_role
 
+
+def _select_single_adapter_cache_mode(config: object) -> str:
+    """Resolve cache mode when MultiLoRA routing/evolution is disabled."""
+
+    requested_mode = getattr(config, "kvcache_mode", "hf")
+    if getattr(config, "enable_flashinfer_paged_kv", False) or requested_mode == "flashinfer":
+        return "flashinfer"
+    if requested_mode == "full" or not getattr(config, "enable_br_cache", True):
+        return "full"
+    return "hf"
+
+
 @dataclass
 class ModelConfig:
     """Configuration for model loading.
@@ -65,14 +77,20 @@ class ModelManager:
         self.cpu_offload = config.cpu_offload
         self.default_logical_adapter = config.default_logical_adapter
         self.active_logical_adapter_name = config.default_logical_adapter
-        if config.kvcache_mode == "hf" and config.enable_multilora:
-            if config.enable_br_cache:
-                config.kvcache_mode = "br"
-            elif config.enable_flashinfer_paged_kv:
-                config.kvcache_mode = "flashinfer"
+        if config.kvcache_mode == "hf":
+            if config.enable_multilora:
+                if config.enable_br_cache:
+                    config.kvcache_mode = "br"
+                elif config.enable_flashinfer_paged_kv:
+                    config.kvcache_mode = "flashinfer"
+                else:
+                    config.kvcache_mode = "full"
+                config.kvcache_decompose = config.kvcache_mode == "br"
             else:
-                config.kvcache_mode = "full"
-            config.kvcache_decompose = config.kvcache_mode == "br"
+                config.kvcache_mode = _select_single_adapter_cache_mode(config)
+                config.enable_br_cache = False
+                config.enable_flashinfer_paged_kv = config.kvcache_mode == "flashinfer"
+                config.kvcache_decompose = False
         dtype = get_torch_dtype()
         LOG(
             f"ModelManager init model={config.model_name} device={self.device} dtype={dtype} "
