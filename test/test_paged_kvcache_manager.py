@@ -30,10 +30,10 @@ def test_paged_kv_cache_reuses_same_adapter_prefix():
 
     hit = mgr.begin_request([1, 2, 3, 4], "general")
     assert hit.match_len == 3
-    assert hit.prefill_from == 3
+    assert hit.prefill_from == 2
     hk, hv = mgr.get_full(0, request=hit)
     assert hk is not None and hv is not None
-    assert hk.shape[2] == 3
+    assert hk.shape[2] == 2
     assert torch.equal(hk[:, :, :2, :], k[:, :, :2, :])
     mgr.abort_request(hit)
 
@@ -48,6 +48,17 @@ def test_paged_kv_cache_is_adapter_specific():
     other = mgr.begin_request([1, 2, 3], "coding")
     assert other.match_len == 0
     mgr.abort_request(other)
+
+
+def test_paged_kv_dense_cache_grows_when_max_pages_unbounded():
+    mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=0)
+    req = mgr.begin_request([1, 2, 3], "general")
+    k, v = _kv(3, 6)
+    mgr.append_full(0, k, v, request=req)
+
+    assert mgr.paged_kv_cache is not None
+    assert mgr.paged_kv_cache.shape[1] >= 2
+    mgr.abort_request(req)
 
 
 def test_paged_kv_full_prompt_hit_replays_last_token():
@@ -85,10 +96,9 @@ def test_paged_kv_oom_rolls_back_partial_pages():
     mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=1)
     req = mgr.begin_request([1, 2, 3], "general")
     k, v = _kv(3, 5)
-    mgr.append_full(0, k, v, request=req)
 
     with pytest.raises(RuntimeError):
-        mgr.commit_request(req, [1, 2, 3])
+        mgr.append_full(0, k, v, request=req)
 
     assert mgr.allocated_pages == 0
 
