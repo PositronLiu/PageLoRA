@@ -37,6 +37,10 @@ class ModelConfig:
     cpu_offload: bool = False
     enable_multilora: bool = False
     enable_br_cache: bool = True
+    enable_flashinfer_paged_kv: bool = False
+    flashinfer_page_size: int = 32
+    flashinfer_max_pages: int = 0
+    flashinfer_workspace_mb: int = 128
     kvcache_mode: str = "hf"
     kvcache_decompose: bool = False
     logical_adapters: tuple[str, ...] = ("general",)
@@ -62,7 +66,12 @@ class ModelManager:
         self.default_logical_adapter = config.default_logical_adapter
         self.active_logical_adapter_name = config.default_logical_adapter
         if config.kvcache_mode == "hf" and config.enable_multilora:
-            config.kvcache_mode = "br" if config.enable_br_cache else "full"
+            if config.enable_br_cache:
+                config.kvcache_mode = "br"
+            elif config.enable_flashinfer_paged_kv:
+                config.kvcache_mode = "flashinfer"
+            else:
+                config.kvcache_mode = "full"
             config.kvcache_decompose = config.kvcache_mode == "br"
         dtype = get_torch_dtype()
         LOG(
@@ -127,16 +136,28 @@ class ModelManager:
         if cache_mode == "hf" and config.kvcache_decompose:
             cache_mode = "br"
             config.kvcache_mode = cache_mode
-        if cache_mode in {"br", "full"}:
+        if cache_mode in {"br", "full", "flashinfer"}:
             num_layers = len(self.lora_runtime.layers)
             if cache_mode == "br":
                 from model.br_kvcache_manager import BRKVCacheManager
 
                 self._kvcache_manager = BRKVCacheManager(num_layers=num_layers)
-            else:
+            elif cache_mode == "full":
                 from model.full_kvcache_manager import FullKVCacheManager
 
                 self._kvcache_manager = FullKVCacheManager(num_layers=num_layers)
+            else:
+                from model.paged_kvcache_manager import FlashInferPagedKVCacheManager
+
+                self._kvcache_manager = FlashInferPagedKVCacheManager(
+                    num_layers=num_layers,
+                    page_size=config.flashinfer_page_size,
+                    max_pages=config.flashinfer_max_pages,
+                    workspace_mb=config.flashinfer_workspace_mb,
+                    device=self.device,
+                    dtype=dtype,
+                    model_config=self.model.config,
+                )
             self.lora_runtime.set_kvcache_manager(self._kvcache_manager)
             LOG(f"{type(self._kvcache_manager).__name__} initialized layers={num_layers}")
 

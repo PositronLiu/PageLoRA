@@ -211,6 +211,25 @@ def generate_with_logprobs(
                         max_time=max_time,
                     )
 
+    if cache_mode == "flashinfer":
+        from model.flashinfer_kvcache_generation import generate_with_flashinfer_kvcache
+
+        resolved = adapter_name or manager.active_logical_adapter_name
+        with manager.use_adapter(adapter_name=resolved, role=AdapterRole.SERVE.value):
+            with manager.inference_session(enable_cache=False):  # cache managed externally
+                with torch.no_grad():
+                    return generate_with_flashinfer_kvcache(
+                        manager,
+                        prompt_ids,
+                        adapter_name=resolved,
+                        max_new_tokens=max_new_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        repetition_penalty=repetition_penalty,
+                        max_time=max_time,
+                    )
+
     model = manager.model
     tokenizer = manager.tokenizer
     device = manager.device
