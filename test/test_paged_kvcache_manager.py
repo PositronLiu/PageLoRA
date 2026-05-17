@@ -18,6 +18,14 @@ def _kv(length: int, value: float) -> tuple[torch.Tensor, torch.Tensor]:
     return k, v
 
 
+def _cache_k_tokens(cache: torch.Tensor, page_id: int, length: int) -> torch.Tensor:
+    return cache[page_id, 0, :length, :, :].transpose(0, 1).unsqueeze(0)
+
+
+def _cache_v_tokens(cache: torch.Tensor, page_id: int, length: int) -> torch.Tensor:
+    return cache[page_id, 1, :length, :, :].transpose(0, 1).unsqueeze(0)
+
+
 def test_paged_kv_cache_reuses_same_adapter_prefix():
     mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=8)
     req = mgr.begin_request([1, 2, 3], "general")
@@ -31,10 +39,12 @@ def test_paged_kv_cache_reuses_same_adapter_prefix():
     hit = mgr.begin_request([1, 2, 3, 4], "general")
     assert hit.match_len == 3
     assert hit.prefill_from == 2
-    hk, hv = mgr.get_full(0, request=hit)
-    assert hk is not None and hv is not None
-    assert hk.shape[2] == 2
-    assert torch.equal(hk[:, :, :2, :], k[:, :, :2, :])
+    layer_cache = mgr.layer_cache(0)
+    assert layer_cache is not None
+    span = hit.prefix_spans[0]
+    assert span.length == 2
+    assert torch.equal(_cache_k_tokens(layer_cache, span.block_id, span.length), k[:, :, :2, :])
+    assert torch.equal(_cache_v_tokens(layer_cache, span.block_id, span.length), v[:, :, :2, :])
     mgr.abort_request(hit)
 
 
@@ -61,6 +71,22 @@ def test_paged_kv_dense_cache_grows_when_max_pages_unbounded():
     mgr.abort_request(req)
 
 
+def test_paged_kv_dense_cache_preserves_token_layout():
+    mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=4)
+    req = mgr.begin_request([1, 2, 3], "general")
+    k = torch.arange(1 * 2 * 3 * 4, dtype=torch.float32).view(1, 2, 3, 4)
+    v = k + 1000
+    mgr.append_full(0, k, v, request=req)
+
+    layer_cache = mgr.layer_cache(0)
+    assert layer_cache is not None
+    assert torch.equal(_cache_k_tokens(layer_cache, 0, 2), k[:, :, :2, :])
+    assert torch.equal(_cache_v_tokens(layer_cache, 0, 2), v[:, :, :2, :])
+    assert torch.equal(_cache_k_tokens(layer_cache, 1, 1), k[:, :, 2:, :])
+    assert torch.equal(_cache_v_tokens(layer_cache, 1, 1), v[:, :, 2:, :])
+    mgr.abort_request(req)
+
+
 def test_paged_kv_full_prompt_hit_replays_last_token():
     mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2)
     req = mgr.begin_request([7, 8, 9], "general")
@@ -71,10 +97,16 @@ def test_paged_kv_full_prompt_hit_replays_last_token():
     hit = mgr.begin_request([7, 8, 9], "general")
     assert hit.match_len == 3
     assert hit.prefill_from == 2
-    hk, _ = mgr.get_full(0, request=hit)
-    assert hk is not None
-    assert hk.shape[2] == 2
+    layer_cache = mgr.layer_cache(0)
+    assert layer_cache is not None
+    assert hit.prefix_spans[0].length == 2
     mgr.abort_request(hit)
+
+
+def test_paged_kv_get_full_is_disabled():
+    mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2)
+    with pytest.raises(RuntimeError, match="no longer materializes"):
+        mgr.get_full(0)
 
 
 def test_paged_kv_invalidate_adapter_frees_pages():
