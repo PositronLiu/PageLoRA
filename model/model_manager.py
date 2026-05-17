@@ -53,6 +53,8 @@ class ModelConfig:
     flashinfer_page_size: int = 32
     flashinfer_max_pages: int = 0
     flashinfer_workspace_mb: int = 128
+    flashinfer_kv_append_mode: str = "manual"
+    flashinfer_qk_norm: bool = False
     kvcache_mode: str = "hf"
     kvcache_decompose: bool = False
     logical_adapters: tuple[str, ...] = ("general",)
@@ -172,6 +174,7 @@ class ModelManager:
                     page_size=config.flashinfer_page_size,
                     max_pages=config.flashinfer_max_pages,
                     workspace_mb=config.flashinfer_workspace_mb,
+                    kv_append_mode=config.flashinfer_kv_append_mode,
                     device=self.device,
                     dtype=dtype,
                     model_config=self.model.config,
@@ -395,4 +398,3 @@ class ModelManager:
         """
 
         return self.lora_runtime.trainable_parameters()
-

@@ -87,6 +87,39 @@ def test_paged_kv_dense_cache_preserves_token_layout():
     mgr.abort_request(req)
 
 
+def test_paged_kv_flashinfer_append_matches_manual_layout():
+    if not torch.cuda.is_available():
+        pytest.skip("flashinfer append test requires CUDA")
+
+    try:
+        import flashinfer.page  # noqa: F401
+    except Exception:
+        pytest.skip("flashinfer page append is unavailable")
+
+    device = torch.device("cuda")
+    mgr = FlashInferPagedKVCacheManager(
+        num_layers=1,
+        page_size=2,
+        max_pages=4,
+        kv_append_mode="flashinfer",
+        device=device,
+        dtype=torch.float16,
+    )
+    req = mgr.begin_request([1, 2, 3], "general")
+    k = torch.arange(1 * 2 * 3 * 128, device=device, dtype=torch.float16).view(1, 2, 3, 128)
+    v = k + 1000
+    mgr.append_full(0, k, v, request=req)
+    torch.cuda.synchronize(device)
+
+    layer_cache = mgr.layer_cache(0)
+    assert layer_cache is not None
+    assert torch.equal(_cache_k_tokens(layer_cache, 0, 2), k[:, :, :2, :])
+    assert torch.equal(_cache_v_tokens(layer_cache, 0, 2), v[:, :, :2, :])
+    assert torch.equal(_cache_k_tokens(layer_cache, 1, 1), k[:, :, 2:, :])
+    assert torch.equal(_cache_v_tokens(layer_cache, 1, 1), v[:, :, 2:, :])
+    mgr.abort_request(req)
+
+
 def test_paged_kv_full_prompt_hit_replays_last_token():
     mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2)
     req = mgr.begin_request([7, 8, 9], "general")

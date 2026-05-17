@@ -154,7 +154,8 @@ def _sample_next_tokens(
     processed = _apply_repetition_penalty(logits, token_histories, repetition_penalty)
     if do_sample:
         processed = processed / max(temperature, 1e-5)
-        processed = _apply_top_k_top_p(processed, top_k=top_k, top_p=top_p)
+        if sampling_mode != "flashinfer_topk_topp":
+            processed = _apply_top_k_top_p(processed, top_k=top_k, top_p=top_p)
 
     if sampling_mode == "flashinfer_topk_topp" and do_sample:
         try:
@@ -403,4 +404,3 @@ def generate_batch(
         response_texts.append(tokenizer.decode(response_ids, skip_special_tokens=True))
 
     return BatchGenerationOutput(response_texts=response_texts, response_ids=response_ids_batch)
-
