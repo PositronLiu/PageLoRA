@@ -202,7 +202,7 @@ def generate_with_logprobs(
         cache_mode = "br"
 
     if cache_mode == "br":
-        from model.br_kvcache_generation import generate_with_br_kvcache
+        from model.brcache.generation import generate_with_br_kvcache
 
         resolved = adapter_name or manager.active_logical_adapter_name
         with manager.use_adapter(adapter_name=resolved, role=AdapterRole.SERVE.value):
@@ -224,7 +224,7 @@ def generate_with_logprobs(
                     )
 
     if cache_mode == "full":
-        from model.full_kvcache_generation import generate_with_full_kvcache
+        from model.fullcache.generation import generate_with_full_kvcache
 
         resolved = adapter_name or manager.active_logical_adapter_name
         with manager.use_adapter(adapter_name=resolved, role=AdapterRole.SERVE.value):
@@ -246,7 +246,7 @@ def generate_with_logprobs(
                     )
 
     if cache_mode == "flashinfer":
-        from model.flashinfer_kvcache_generation import generate_with_flashinfer_kvcache
+        from model.flashinfer.generation import generate_with_flashinfer_kvcache
 
         resolved = adapter_name or manager.active_logical_adapter_name
         with manager.use_adapter(adapter_name=resolved, role=AdapterRole.SERVE.value):

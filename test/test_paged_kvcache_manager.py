@@ -5,11 +5,11 @@ from __future__ import annotations
 import pytest
 import torch
 
-from model.paged_kvcache_manager import (
+from model.kvcache.paged_kvcache_manager import (
     FlashInferPagedKVCacheManager,
     build_flashinfer_page_table,
 )
-from model.radix_cache import KVBlockSpan
+from model.kvcache.radix_cache import KVBlockSpan
 
 
 def _kv(length: int, value: float) -> tuple[torch.Tensor, torch.Tensor]:

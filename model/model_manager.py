@@ -159,15 +159,15 @@ class ModelManager:
         if cache_mode in {"br", "full", "flashinfer"}:
             num_layers = len(self.lora_runtime.layers)
             if cache_mode == "br":
-                from model.br_kvcache_manager import BRKVCacheManager
+                from model.brcache.manager import BRKVCacheManager
 
                 self._kvcache_manager = BRKVCacheManager(num_layers=num_layers)
             elif cache_mode == "full":
-                from model.full_kvcache_manager import FullKVCacheManager
+                from model.fullcache.manager import FullKVCacheManager
 
                 self._kvcache_manager = FullKVCacheManager(num_layers=num_layers)
             else:
-                from model.paged_kvcache_manager import FlashInferPagedKVCacheManager
+                from model.kvcache.paged_kvcache_manager import FlashInferPagedKVCacheManager
 
                 self._kvcache_manager = FlashInferPagedKVCacheManager(
                     num_layers=num_layers,

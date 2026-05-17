@@ -1,6 +1,6 @@
 import pytest
 
-from model.radix_cache import FULL_KEY, KVBlockSpan, RadixPrefixCache, span_total_length
+from model.kvcache.radix_cache import FULL_KEY, KVBlockSpan, RadixPrefixCache, span_total_length
 
 
 def test_radix_lookup_partial_inside_edge():

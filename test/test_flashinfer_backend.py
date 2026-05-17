@@ -92,7 +92,7 @@ def _backend_class_for(monkeypatch, *, decode_wrapper, prefill_wrapper):
         BatchPrefillWithPagedKVCacheWrapper=prefill_wrapper,
     )
     monkeypatch.setitem(sys.modules, "flashinfer", fake_flashinfer)
-    module = importlib.import_module("model.flashinfer_attention_backend")
+    module = importlib.import_module("model.flashinfer.attention_backend")
     module = importlib.reload(module)
     return module.FlashInferAttentionBackend
 
