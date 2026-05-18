@@ -168,15 +168,20 @@ class LoRARuntime:
 
         if adapter_name not in self._serve_registry:
             return
+        moved = False
         with torch.no_grad():
             for weights in self._serve_registry[adapter_name].values():
                 if weights.a.data.device != device:
                     weights.a.data = weights.a.data.to(device)
+                    moved = True
                 if weights.b.data.device != device:
                     weights.b.data = weights.b.data.to(device)
+                    moved = True
         if adapter_name in self._gpu_resident_adapters:
             self._gpu_resident_adapters.remove(adapter_name)
         self._gpu_resident_adapters.append(adapter_name)
+        if moved:
+            self._clear_flashinfer_effective_weight_caches()
 
         if self._kvcache_manager is not None:
             ensure_cache = getattr(self._kvcache_manager, "ensure_adapter_cache_on_device", None)
@@ -190,14 +195,19 @@ class LoRARuntime:
 
         if adapter_name not in self._serve_registry:
             return
+        moved = False
         with torch.no_grad():
             for weights in self._serve_registry[adapter_name].values():
                 if weights.a.data.device.type != "cpu":
                     weights.a.data = weights.a.data.cpu()
+                    moved = True
                 if weights.b.data.device.type != "cpu":
                     weights.b.data = weights.b.data.cpu()
+                    moved = True
         if adapter_name in self._gpu_resident_adapters:
             self._gpu_resident_adapters.remove(adapter_name)
+        if moved:
+            self._clear_flashinfer_effective_weight_caches()
 
         if self._kvcache_manager is not None:
             offload_cache = getattr(self._kvcache_manager, "offload_adapter_cache", None)
@@ -266,6 +276,8 @@ class LoRARuntime:
         """Switch the active logical adapter and runtime role."""
 
         role = normalize_adapter_role(role)
+        previous_adapter_name = self.active_logical_adapter_name
+        previous_role = self.active_role
         if role == AdapterRole.SERVE.value:
             adapter_name = adapter_name or self.default_logical_adapter
             if adapter_name not in self.logical_adapter_names:
@@ -281,9 +293,11 @@ class LoRARuntime:
                 )
             self.active_logical_adapter_name = adapter_name
         elif adapter_name is not None:
-            self.active_logical_adapter_name = adapter_name
+                self.active_logical_adapter_name = adapter_name
 
         self.active_role = role
+        if previous_adapter_name != self.active_logical_adapter_name or previous_role != self.active_role:
+            self._clear_flashinfer_effective_weight_caches()
         self._broadcast_active()
 
     def has_active_train(self) -> bool:
@@ -379,6 +393,8 @@ class LoRARuntime:
                 if module.train_b is not None and module.train_b.data.device != device:
                     module.train_b.data = module.train_b.data.to(device)
                     moved += 1
+        if moved:
+            self._clear_flashinfer_effective_weight_caches()
 
         if self._adapter_offload:
             self._gpu_resident_adapters.clear()
@@ -426,6 +442,7 @@ class LoRARuntime:
                     weights.a.data.copy_(tensor.to(weights.a.device))
                 elif leaf_name == "lora_serve_b":
                     weights.b.data.copy_(tensor.to(weights.b.device))
+        self._clear_flashinfer_effective_weight_caches()
         if self.active_role == AdapterRole.SERVE.value and self.active_logical_adapter_name == adapter_name:
             self._broadcast_active()
 
@@ -484,6 +501,7 @@ class LoRARuntime:
         for layer_idx, module_name, module in self._manual_modules:
             weights = adapter_layers[(layer_idx, module_name)]
             module.commit_train_to_serve(weights.a, weights.b)
+        self._clear_flashinfer_effective_weight_caches()
         if clear_train:
             self.clear_train_workspace()
         elif self.active_role == AdapterRole.SERVE.value and self.active_logical_adapter_name == owner:
@@ -512,3 +530,12 @@ class LoRARuntime:
         if adapter_name is None:
             raise ValueError("serve weights require a logical adapter name")
         return self._serve_registry[adapter_name][(layer_idx, module_name)]
+
+    def _clear_flashinfer_effective_weight_caches(self) -> None:
+        """Clear optional FlashInfer serve-time merged-weight caches."""
+
+        try:
+            from model.flashinfer.effective_weights import clear_flashinfer_effective_weight_cache
+        except Exception:
+            return
+        clear_flashinfer_effective_weight_cache(self.layer_plans, self.layers)

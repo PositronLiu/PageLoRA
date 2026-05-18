@@ -10,6 +10,8 @@ import flashinfer
 import torch
 import torch.nn.functional as F
 
+from model.flashinfer.effective_weights import effective_linear, effective_packed_linear
+
 
 @dataclass(frozen=True)
 class PackedLinear:
@@ -50,6 +52,16 @@ def project_qkv_packed(
     q_module = plan.modules.get("self_attn.q_proj") or attn.q_proj
     k_module = plan.modules.get("self_attn.k_proj") or attn.k_proj
     v_module = plan.modules.get("self_attn.v_proj") or attn.v_proj
+    effective = effective_packed_linear(
+        owner=plan,
+        attr="_flashinfer_effective_qkv",
+        modules=(q_module, k_module, v_module),
+    )
+    if effective is not None:
+        q_dim, k_dim, v_dim = effective.out_features
+        qkv = F.linear(hidden, effective.weight, effective.bias)
+        return torch.split(qkv, [q_dim, k_dim, v_dim], dim=-1)
+
     packed = _cached_packed_linear(
         owner=plan,
         attr="_flashinfer_packed_qkv",
@@ -85,6 +97,14 @@ def project_gate_up_packed(
     up_module = getattr(mlp, "up_proj", None)
     if gate_module is None or up_module is None:
         return None
+    effective = effective_packed_linear(
+        owner=mlp,
+        attr="_flashinfer_effective_gate_up",
+        modules=(gate_module, up_module),
+    )
+    if effective is not None:
+        return F.linear(hidden, effective.weight, effective.bias)
+
     packed = _cached_packed_linear(
         owner=mlp,
         attr="_flashinfer_packed_gate_up",
@@ -126,9 +146,20 @@ def project_down(mlp: torch.nn.Module, hidden: torch.Tensor) -> torch.Tensor:
     down_module = getattr(mlp, "down_proj", None)
     if down_module is None:
         raise RuntimeError("MLP module does not expose down_proj")
-    if _can_functional_linear(down_module):
-        return F.linear(hidden, down_module.weight, down_module.bias)
-    return down_module(hidden)
+    return project_linear(down_module, hidden)
+
+
+def project_linear(module: torch.nn.Module, hidden: torch.Tensor) -> torch.Tensor:
+    """Run one linear module with serve effective weights when available."""
+
+    effective = effective_linear(module)
+    if effective is not None:
+        return F.linear(hidden, effective.weight, effective.bias)
+    if _has_active_lora(module):
+        return module(hidden)
+    if _can_functional_linear(module):
+        return F.linear(hidden, module.weight, module.bias)
+    return module(hidden)
 
 
 def _cached_packed_linear(
@@ -175,6 +206,10 @@ def _cached_packed_linear(
 def _can_functional_linear(module: torch.nn.Module) -> bool:
     weight = getattr(module, "weight", None)
     return isinstance(weight, torch.Tensor) and weight.ndim == 2
+
+
+def _has_active_lora(module: torch.nn.Module) -> bool:
+    return getattr(module, "active_role", "base") != "base"
 
 
 def _linear_weight(module: torch.nn.Module) -> torch.Tensor:

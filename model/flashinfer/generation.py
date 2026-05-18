@@ -15,10 +15,10 @@ from core.constants import (
 )
 from core.utils import LOG
 from multilora.runtime import AdapterRole
-from model.brcache.generation import _model_final_norm_and_head
 from model.flashinfer.attention_backend import FlashInferAttentionBackend
 from model.flashinfer.layer_runner import _run_flashinfer_attention
 from model.flashinfer.perf import FlashInferPerfTrace
+from model.flashinfer.packed_ops import project_linear
 from model.flashinfer.sampling import greedy_argmax_token
 from model.kvcache.flashinfer_page_table import FlashInferPageTable
 from model.kvcache.paged_kvcache_manager import FlashInferPagedKVCacheManager
@@ -165,6 +165,13 @@ def _token_tensors_to_list(tokens: list[torch.Tensor]) -> list[int]:
     if not tokens:
         return []
     return torch.cat(tokens, dim=0).tolist()
+
+
+def _model_final_norm_and_head(model, hidden: torch.Tensor) -> torch.Tensor:
+    """Apply final norm and run lm_head through the FlashInfer linear helper."""
+
+    normed = model.model.norm(hidden[:, -1:, :])
+    return project_linear(model.lm_head, normed)
 
 
 def generate_with_flashinfer_kvcache(

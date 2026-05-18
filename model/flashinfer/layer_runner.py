@@ -18,6 +18,7 @@ from model.flashinfer.packed_ops import (
     apply_gate_up_activation,
     project_down,
     project_gate_up_packed,
+    project_linear,
 )
 from model.kvcache.paged_kvcache_manager import FlashInferPagedKVCacheManager
 from model.kvcache.paged_kvcache_request import FlashInferPagedKVRequest
@@ -104,8 +105,8 @@ def _run_flashinfer_attention(
         perf.add_layer(mode, layer_idx, "o_layout_s", o_layout_t0)
 
     o_proj_t0 = perf.tic() if perf is not None else time.perf_counter()
-    o_module = plan.modules.get("self_attn.o_proj")
-    attn_output = o_module(attn_output) if o_module is not None else layer.self_attn.o_proj(attn_output)
+    o_module = plan.modules.get("self_attn.o_proj") or layer.self_attn.o_proj
+    attn_output = project_linear(o_module, attn_output)
     if perf is not None:
         perf.add_layer(mode, layer_idx, "o_proj_s", o_proj_t0)
 
