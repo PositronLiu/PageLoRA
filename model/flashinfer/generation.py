@@ -17,6 +17,7 @@ from core.utils import LOG
 from multilora.runtime import AdapterRole
 from model.flashinfer.attention_backend import FlashInferAttentionBackend
 from model.flashinfer.layer_runner import _run_flashinfer_attention
+from model.flashinfer.norm import apply_rmsnorm
 from model.flashinfer.perf import FlashInferPerfTrace
 from model.flashinfer.packed_ops import project_linear
 from model.flashinfer.sampling import greedy_argmax_token
@@ -167,11 +168,24 @@ def _token_tensors_to_list(tokens: list[torch.Tensor]) -> list[int]:
     return torch.cat(tokens, dim=0).tolist()
 
 
-def _model_final_norm_and_head(model, hidden: torch.Tensor) -> torch.Tensor:
+def _model_final_norm_and_head(
+    model,
+    hidden: torch.Tensor,
+    *,
+    perf: FlashInferPerfTrace | None = None,
+    prefix: str | None = None,
+) -> torch.Tensor:
     """Apply final norm and run lm_head through the FlashInfer linear helper."""
 
-    normed = model.model.norm(hidden[:, -1:, :])
-    return project_linear(model.lm_head, normed)
+    norm_t0 = perf.tic() if perf is not None else time.perf_counter()
+    normed = apply_rmsnorm(model.model.norm, hidden[:, -1:, :])
+    if perf is not None and prefix is not None:
+        perf.add(f"{prefix}_final_norm_s", norm_t0)
+    head_t0 = perf.tic() if perf is not None else time.perf_counter()
+    logits = project_linear(model.lm_head, normed)
+    if perf is not None and prefix is not None:
+        perf.add(f"{prefix}_lm_head_project_s", head_t0)
+    return logits
 
 
 def generate_with_flashinfer_kvcache(
@@ -235,7 +249,7 @@ def generate_with_flashinfer_kvcache(
             perf=perf,
         )
         lm_t0 = perf.tic()
-        logits = _model_final_norm_and_head(model, hidden)
+        logits = _model_final_norm_and_head(model, hidden, perf=perf, prefix="prefill")
         perf.add("prefill_lm_head_s", lm_t0)
 
         generated_ids: list[int] = []
@@ -338,7 +352,7 @@ def generate_with_flashinfer_kvcache(
             elif token_id is not None:
                 cached_generated_ids.append(token_id)
             lm_t0 = perf.tic()
-            logits = _model_final_norm_and_head(model, hidden)
+            logits = _model_final_norm_and_head(model, hidden, perf=perf, prefix="decode")
             perf.add("decode_lm_head_s", lm_t0)
             current_pos += 1
             perf.log_decode_progress(

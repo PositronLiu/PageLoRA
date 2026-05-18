@@ -8,6 +8,7 @@ from typing import Literal
 import torch
 
 from model.flashinfer.attention_backend import FlashInferAttentionBackend
+from model.flashinfer.norm import apply_rmsnorm
 from model.flashinfer.perf import FlashInferPerfTrace
 from model.flashinfer.projection import (
     apply_flashinfer_rope_pos_ids,
@@ -43,7 +44,7 @@ def _run_flashinfer_attention(
     bsz, seqlen, _ = hidden.shape
     qkv_t0 = perf.tic() if perf is not None else time.perf_counter()
     input_norm_t0 = perf.tic() if perf is not None else time.perf_counter()
-    normed = layer.input_layernorm(hidden)
+    normed = apply_rmsnorm(layer.input_layernorm, hidden)
     if perf is not None:
         perf.add_layer(mode, layer_idx, "input_norm_s", input_norm_t0)
     qkv_project_t0 = perf.tic() if perf is not None else time.perf_counter()
@@ -116,7 +117,7 @@ def _run_flashinfer_attention(
         perf.add_layer(mode, layer_idx, "post_residual_s", residual_t0)
 
     post_norm_t0 = perf.tic() if perf is not None else time.perf_counter()
-    mlp_input = layer.post_attention_layernorm(hidden)
+    mlp_input = apply_rmsnorm(layer.post_attention_layernorm, hidden)
     if perf is not None:
         perf.add_layer(mode, layer_idx, "post_norm_s", post_norm_t0)
 
