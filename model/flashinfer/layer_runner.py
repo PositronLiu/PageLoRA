@@ -9,7 +9,11 @@ import torch
 
 from model.flashinfer.attention_backend import FlashInferAttentionBackend
 from model.flashinfer.perf import FlashInferPerfTrace
-from model.flashinfer.projection import apply_flashinfer_rope_pos_ids, project_qkv_with_optional_norm
+from model.flashinfer.projection import (
+    apply_flashinfer_rope_pos_ids,
+    apply_flashinfer_rope_pos_ids_for_append,
+    project_qkv_with_optional_norm,
+)
 from model.kvcache.paged_kvcache_manager import FlashInferPagedKVCacheManager
 from model.kvcache.paged_kvcache_request import FlashInferPagedKVRequest
 
@@ -43,18 +47,28 @@ def _run_flashinfer_attention(
         perf.add_layer(mode, layer_idx, "qkv_s", qkv_t0)
 
     rope_t0 = perf.tic() if perf is not None else time.perf_counter()
-    Q_attn, K_store = apply_flashinfer_rope_pos_ids(
-        layer,
-        projected.q_bshd,
-        projected.k_bshd,
-        position_ids,
-    )
-    V = projected.v_bhsd
+    if bsz == 1:
+        Q_attn, K_append = apply_flashinfer_rope_pos_ids_for_append(
+            layer,
+            projected.q_bshd,
+            projected.k_bshd,
+            position_ids,
+        )
+        V_append = projected.v_bshd[0].contiguous()
+    else:
+        Q_attn, K_store = apply_flashinfer_rope_pos_ids(
+            layer,
+            projected.q_bshd,
+            projected.k_bshd,
+            position_ids,
+        )
+        K_append = K_store[0].transpose(0, 1).contiguous()
+        V_append = projected.v_bhsd[0].transpose(0, 1).contiguous()
     if perf is not None:
         perf.add_layer(mode, layer_idx, "rope_s", rope_t0)
 
     append_t0 = perf.tic() if perf is not None else time.perf_counter()
-    cache_mgr.append_full(layer_idx, K_store, V, request=request_cache)
+    cache_mgr.append_full_nhd(layer_idx, K_append, V_append, request=request_cache)
     if perf is not None:
         perf.add_layer(mode, layer_idx, "kv_append_s", append_t0)
 

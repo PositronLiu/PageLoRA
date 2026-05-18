@@ -14,6 +14,7 @@ import torch
 
 from model.kvcache.flashinfer_page_table import (
     FlashInferPageTable,
+    FlashInferPageTableBuffer,
     _coalesce_block_spans,
     build_flashinfer_page_table,
 )
@@ -67,6 +68,7 @@ class FlashInferPagedKVCacheManager:
         self._max_len_by_adapter: dict[str, int] = {}
         self._latest_token_ids_by_adapter: dict[str, list[int]] = {}
         self._perf_counters: dict[str, float] = {}
+        self._page_table_buffer: FlashInferPageTableBuffer | None = None
 
     @property
     def paged_kv_cache(self) -> torch.Tensor | None:
@@ -360,6 +362,37 @@ class FlashInferPagedKVCacheManager:
         self._perf_add("manager_append_full_calls", 1.0)
         self._perf_add("manager_append_full_tokens", float(k.size(2)))
 
+    def append_full_nhd(
+        self,
+        layer_idx: int,
+        k_nhd: torch.Tensor,
+        v_nhd: torch.Tensor,
+        *,
+        request: FlashInferPagedKVRequest | None = None,
+    ) -> None:
+        """Append one layer's request-local K/V chunk in NHD layout."""
+
+        request = request or self._active_request
+        if request is None:
+            raise RuntimeError("append_full_nhd requires an active request")
+        t0 = time.perf_counter()
+        chunk_index = request.layer_chunk_counts.get(layer_idx, 0)
+        if chunk_index == len(request.page_span_chunks):
+            self.reserve_chunk(request, k_nhd.size(0))
+        if chunk_index >= len(request.page_span_chunks):
+            raise RuntimeError("missing reserved page spans for KV chunk")
+        self._block_store.write_layer_nhd(
+            request.page_span_chunks[chunk_index],
+            layer_idx=layer_idx,
+            k_nhd=k_nhd,
+            v_nhd=v_nhd,
+        )
+        request.layer_chunk_counts[layer_idx] = chunk_index + 1
+        self._perf_add("manager_append_full_s", time.perf_counter() - t0)
+        self._perf_add("manager_append_full_calls", 1.0)
+        self._perf_add("manager_append_full_nhd_calls", 1.0)
+        self._perf_add("manager_append_full_tokens", float(k_nhd.size(0)))
+
     def get_full(
         self,
         layer_idx: int,
@@ -390,12 +423,21 @@ class FlashInferPagedKVCacheManager:
         spans: list[KVBlockSpan],
         *,
         device: torch.device | None = None,
+        reuse_buffer: bool = False,
     ) -> FlashInferPageTable:
         """Build FlashInfer page-table tensors for the given page spans."""
 
         table_device = device or self._device or torch.device("cpu")
         t0 = time.perf_counter()
-        table = build_flashinfer_page_table(spans, page_size=self._page_size, device=table_device)
+        if reuse_buffer:
+            if self._page_table_buffer is None or self._page_table_buffer.device != table_device:
+                self._page_table_buffer = FlashInferPageTableBuffer(
+                    page_size=self._page_size,
+                    device=table_device,
+                )
+            table = self._page_table_buffer.update_from_spans(spans)
+        else:
+            table = build_flashinfer_page_table(spans, page_size=self._page_size, device=table_device)
         self._perf_add("manager_build_page_table_s", time.perf_counter() - t0)
         self._perf_add("manager_build_page_table_calls", 1.0)
         self._perf_add("manager_build_page_table_input_spans", float(len(spans)))

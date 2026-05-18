@@ -9,6 +9,7 @@ from model.kvcache.paged_kvcache_manager import (
     FlashInferPagedKVCacheManager,
     build_flashinfer_page_table,
 )
+from model.kvcache.flashinfer_page_table import FlashInferPageTableBuffer
 from model.kvcache.radix_cache import KVBlockSpan
 
 
@@ -84,6 +85,49 @@ def test_paged_kv_dense_cache_preserves_token_layout():
     assert torch.equal(_cache_v_tokens(layer_cache, 0, 2), v[:, :, :2, :])
     assert torch.equal(_cache_k_tokens(layer_cache, 1, 1), k[:, :, 2:, :])
     assert torch.equal(_cache_v_tokens(layer_cache, 1, 1), v[:, :, 2:, :])
+    mgr.abort_request(req)
+
+
+def test_paged_kv_append_full_nhd_preserves_token_layout():
+    mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=4)
+    req = mgr.begin_request([1, 2, 3], "general")
+    k_bhsd = torch.arange(1 * 2 * 3 * 4, dtype=torch.float32).view(1, 2, 3, 4)
+    v_bhsd = k_bhsd + 1000
+    mgr.append_full_nhd(
+        0,
+        k_bhsd[0].transpose(0, 1).contiguous(),
+        v_bhsd[0].transpose(0, 1).contiguous(),
+        request=req,
+    )
+
+    layer_cache = mgr.layer_cache(0)
+    assert layer_cache is not None
+    assert torch.equal(_cache_k_tokens(layer_cache, 0, 2), k_bhsd[:, :, :2, :])
+    assert torch.equal(_cache_v_tokens(layer_cache, 0, 2), v_bhsd[:, :, :2, :])
+    assert torch.equal(_cache_k_tokens(layer_cache, 1, 1), k_bhsd[:, :, 2:, :])
+    assert torch.equal(_cache_v_tokens(layer_cache, 1, 1), v_bhsd[:, :, 2:, :])
+    snapshot = mgr.perf_snapshot()
+    assert snapshot["store_write_layer_nhd_calls"] == 1
+    mgr.abort_request(req)
+
+
+def test_paged_kv_append_full_nhd_batches_consecutive_pages():
+    mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=4)
+    req = mgr.begin_request([1, 2, 3, 4], "general")
+    k_bhsd = torch.arange(1 * 2 * 4 * 4, dtype=torch.float32).view(1, 2, 4, 4)
+    v_bhsd = k_bhsd + 1000
+    mgr.append_full_nhd(
+        0,
+        k_bhsd[0].transpose(0, 1).contiguous(),
+        v_bhsd[0].transpose(0, 1).contiguous(),
+        request=req,
+    )
+
+    layer_cache = mgr.layer_cache(0)
+    assert layer_cache is not None
+    assert torch.equal(_cache_k_tokens(layer_cache, 0, 2), k_bhsd[:, :, :2, :])
+    assert torch.equal(_cache_k_tokens(layer_cache, 1, 2), k_bhsd[:, :, 2:, :])
+    assert mgr.perf_snapshot()["store_dense_write_batch_calls"] == 1
     mgr.abort_request(req)
 
 
@@ -200,3 +244,23 @@ def test_flashinfer_page_table_rejects_unaligned_spans():
             page_size=2,
             device=torch.device("cpu"),
         )
+
+
+def test_flashinfer_page_table_buffer_reuses_tensors():
+    buffer = FlashInferPageTableBuffer(page_size=2, device=torch.device("cpu"), initial_capacity=1)
+    first = buffer.update_from_spans([KVBlockSpan(block_id=11, start=0, length=1)])
+    first_indptr = first.paged_kv_indptr
+    first_last = first.paged_kv_last_page_len
+
+    second = buffer.update_from_spans(
+        [
+            KVBlockSpan(block_id=11, start=0, length=2),
+            KVBlockSpan(block_id=12, start=0, length=1),
+        ]
+    )
+
+    assert second.paged_kv_indptr is first_indptr
+    assert second.paged_kv_last_page_len is first_last
+    assert second.paged_kv_indptr.tolist() == [0, 2]
+    assert second.paged_kv_indices.tolist() == [11, 12]
+    assert second.paged_kv_last_page_len.tolist() == [1]

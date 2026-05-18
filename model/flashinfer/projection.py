@@ -17,6 +17,7 @@ class ProjectedQKV:
 
     q_bshd: torch.Tensor
     k_bshd: torch.Tensor
+    v_bshd: torch.Tensor
     v_bhsd: torch.Tensor
 
 
@@ -82,6 +83,7 @@ def project_qkv_with_optional_norm(
     return ProjectedQKV(
         q_bshd=q_bshd,
         k_bshd=k_bshd,
+        v_bshd=v_bshd,
         v_bhsd=v_bshd.transpose(1, 2).contiguous(),
     )
 
@@ -93,6 +95,48 @@ def apply_flashinfer_rope_pos_ids(
     position_ids: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Apply FlashInfer RoPE and return Q/K in ``[B, H, S, D]`` layout."""
+
+    q_nhd, k_nhd, bsz, seqlen, num_qo_heads, num_kv_heads, head_dim = _apply_flashinfer_rope_pos_ids_nhd(
+        layer,
+        q_bshd,
+        k_bshd,
+        position_ids,
+    )
+    q_bhsd = q_nhd.view(bsz, seqlen, num_qo_heads, head_dim).transpose(1, 2).contiguous()
+    k_bhsd = k_nhd.view(bsz, seqlen, num_kv_heads, head_dim).transpose(1, 2).contiguous()
+    return q_bhsd, k_bhsd
+
+
+def apply_flashinfer_rope_pos_ids_for_append(
+    layer: torch.nn.Module,
+    q_bshd: torch.Tensor,
+    k_bshd: torch.Tensor,
+    position_ids: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply FlashInfer RoPE and return Q for attention plus K in append layout.
+
+    The paged KV store wants K as ``[tokens, kv_heads, head_dim]``. Returning
+    that tensor directly avoids producing ``[B, H, S, D]`` only to transpose it
+    back during cache append.
+    """
+
+    q_nhd, k_nhd, bsz, seqlen, num_qo_heads, _num_kv_heads, head_dim = _apply_flashinfer_rope_pos_ids_nhd(
+        layer,
+        q_bshd,
+        k_bshd,
+        position_ids,
+    )
+    q_bhsd = q_nhd.view(bsz, seqlen, num_qo_heads, head_dim).transpose(1, 2).contiguous()
+    return q_bhsd, k_nhd
+
+
+def _apply_flashinfer_rope_pos_ids_nhd(
+    layer: torch.nn.Module,
+    q_bshd: torch.Tensor,
+    k_bshd: torch.Tensor,
+    position_ids: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, int, int, int, int, int]:
+    """Apply FlashInfer RoPE and keep the flat NHD tensors."""
 
     bsz, seqlen, num_qo_heads, head_dim = q_bshd.shape
     k_bsz, k_seqlen, num_kv_heads, k_head_dim = k_bshd.shape
@@ -121,9 +165,7 @@ def apply_flashinfer_rope_pos_ids(
         rope_scale=rope_scale,
         rope_theta=rope_theta,
     )
-    q_bhsd = q_nhd.view(bsz, seqlen, num_qo_heads, head_dim).transpose(1, 2).contiguous()
-    k_bhsd = k_nhd.view(bsz, seqlen, num_kv_heads, head_dim).transpose(1, 2).contiguous()
-    return q_bhsd, k_bhsd
+    return q_nhd, k_nhd, bsz, seqlen, num_qo_heads, num_kv_heads, head_dim
 
 
 def project_qkv_with_flashinfer_rope(

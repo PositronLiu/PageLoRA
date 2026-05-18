@@ -19,6 +19,7 @@ from model.brcache.generation import _model_final_norm_and_head
 from model.flashinfer.attention_backend import FlashInferAttentionBackend
 from model.flashinfer.layer_runner import _run_flashinfer_attention
 from model.flashinfer.perf import FlashInferPerfTrace
+from model.flashinfer.sampling import greedy_argmax_token
 from model.kvcache.flashinfer_page_table import FlashInferPageTable
 from model.kvcache.paged_kvcache_manager import FlashInferPagedKVCacheManager
 from model.kvcache.paged_kvcache_request import FlashInferPagedKVRequest
@@ -160,6 +161,12 @@ def _plan_prefill(
     return page_table
 
 
+def _token_tensors_to_list(tokens: list[torch.Tensor]) -> list[int]:
+    if not tokens:
+        return []
+    return torch.cat(tokens, dim=0).tolist()
+
+
 def generate_with_flashinfer_kvcache(
     manager: "ModelManager",
     prompt_ids: list[int],
@@ -226,9 +233,17 @@ def generate_with_flashinfer_kvcache(
 
         generated_ids: list[int] = []
         cached_generated_ids: list[int] = []
+        generated_token_tensors: list[torch.Tensor] = []
+        cached_generated_token_tensors: list[torch.Tensor] = []
         logprobs: list[float] = []
-        token_histories: list[list[int]] = [prompt_ids + generated_ids]
+        use_gpu_greedy = (
+            sampling_mode == "greedy_fast"
+            and not compute_logprobs
+            and repetition_penalty == 1.0
+        )
+        token_histories: list[list[int]] | None = None if use_gpu_greedy else [prompt_ids + generated_ids]
         current_pos = len(prompt_ids)
+        decode_position_ids = torch.empty((1, 1), device=device, dtype=torch.long)
         t0 = time.perf_counter()
         decode_t0 = perf.tic()
 
@@ -237,31 +252,50 @@ def generate_with_flashinfer_kvcache(
                 break
 
             sample_t0 = perf.tic()
-            next_tokens, next_logprobs = _sample_next_tokens(
-                logits[:, -1, :],
-                token_histories=token_histories,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-                repetition_penalty=repetition_penalty,
-                sampling_mode=sampling_mode,
-                compute_logprobs=compute_logprobs,
-            )
+            if use_gpu_greedy:
+                token_tensor = greedy_argmax_token(logits)
+                next_logprobs = []
+            else:
+                if token_histories is None:
+                    raise RuntimeError("token histories must be initialized outside GPU greedy mode")
+                next_tokens, next_logprobs = _sample_next_tokens(
+                    logits[:, -1, :],
+                    token_histories=token_histories,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    repetition_penalty=repetition_penalty,
+                    sampling_mode=sampling_mode,
+                    compute_logprobs=compute_logprobs,
+                )
+                token_id = next_tokens[0]
+                token_tensor = None
             perf.add("decode_sample_s", sample_t0)
 
-            token_id = next_tokens[0]
-            generated_ids.append(token_id)
-            if compute_logprobs and next_logprobs:
-                logprobs.append(next_logprobs[0])
-            token_histories[0].append(token_id)
+            token_id: int | None
+            if use_gpu_greedy:
+                generated_token_tensors.append(token_tensor.squeeze(1).detach())
+                if ignore_eos:
+                    token_id = None
+                else:
+                    token_id = int(token_tensor[0, 0].item())
+                    generated_ids.append(token_id)
+            else:
+                generated_ids.append(token_id)
+                if compute_logprobs and next_logprobs:
+                    logprobs.append(next_logprobs[0])
+                if token_histories is not None:
+                    token_histories[0].append(token_id)
 
-            if not ignore_eos and token_id == tokenizer.eos_token_id:
+            if token_id is not None and not ignore_eos and token_id == tokenizer.eos_token_id:
                 break
 
             embed_t0 = perf.tic()
-            token_tensor = torch.tensor([[token_id]], device=device, dtype=torch.long)
+            if token_tensor is None:
+                token_tensor = torch.tensor([[token_id]], device=device, dtype=torch.long)
             hidden = model.get_input_embeddings()(token_tensor)
-            position_ids = torch.tensor([[current_pos]], device=device)
+            decode_position_ids.fill_(current_pos)
+            position_ids = decode_position_ids
             perf.add("decode_embed_s", embed_t0)
 
             reserve_t0 = perf.tic()
@@ -292,20 +326,28 @@ def generate_with_flashinfer_kvcache(
                 )
             perf.add("decode_layers_s", layers_t0)
 
-            cached_generated_ids.append(token_id)
+            if use_gpu_greedy:
+                cached_generated_token_tensors.append(token_tensor.squeeze(1).detach())
+            elif token_id is not None:
+                cached_generated_ids.append(token_id)
             lm_t0 = perf.tic()
             logits = _model_final_norm_and_head(model, hidden)
             perf.add("decode_lm_head_s", lm_t0)
             current_pos += 1
             perf.log_decode_progress(
-                generated_tokens=len(generated_ids),
-                cached_tokens=len(cached_generated_ids),
+                generated_tokens=len(generated_token_tensors) if use_gpu_greedy else len(generated_ids),
+                cached_tokens=(
+                    len(cached_generated_token_tensors) if use_gpu_greedy else len(cached_generated_ids)
+                ),
                 current_pos=current_pos,
                 started=t0,
                 cache_snapshot=cache_mgr.perf_snapshot(),
             )
 
         perf.add("decode_total_s", decode_t0)
+        if use_gpu_greedy:
+            generated_ids = _token_tensors_to_list(generated_token_tensors)
+            cached_generated_ids = _token_tensors_to_list(cached_generated_token_tensors)
         final_cache_ids = prompt_ids + cached_generated_ids
         request_span_count = len(request_cache.new_spans)
         request_page_chunks = len(request_cache.page_span_chunks)

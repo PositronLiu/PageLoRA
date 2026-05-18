@@ -12,7 +12,12 @@ import time
 import torch
 
 from model.kvcache.paged_kv_allocator import PagedKVAllocator, PagedKVPage
-from model.kvcache.paged_kv_append import write_layer_flashinfer, write_layer_manual
+from model.kvcache.paged_kv_append import (
+    write_layer_flashinfer,
+    write_layer_flashinfer_nhd,
+    write_layer_manual,
+    write_layer_manual_nhd,
+)
 from model.kvcache.radix_types import KVBlockSpan
 
 PageSpan = KVBlockSpan
@@ -208,6 +213,54 @@ class PagedKVBlockStore:
         self._perf_add("store_written_tokens", float(total_len))
         self._perf_add("store_written_spans", float(len(spans)))
 
+    def write_layer_nhd(
+        self,
+        spans: list[KVBlockSpan],
+        *,
+        layer_idx: int,
+        k_nhd: torch.Tensor,
+        v_nhd: torch.Tensor,
+    ) -> None:
+        """Write one layer's K/V chunk from ``[tokens, kv_heads, head_dim]`` tensors."""
+
+        t0 = time.perf_counter()
+        total_len = sum(span.length for span in spans)
+        if k_nhd.ndim != 3 or v_nhd.ndim != 3:
+            raise ValueError("NHD K/V tensors must have shape [tokens, kv_heads, head_dim]")
+        if total_len != k_nhd.size(0) or total_len != v_nhd.size(0):
+            raise ValueError("reserved span length does not match NHD KV chunk length")
+        required_pages = max((span.block_id for span in spans), default=-1) + 1
+        self._ensure_dense_cache(k_nhd, layer_idx=layer_idx, required_pages=required_pages)
+
+        if self._kv_append_mode == "flashinfer":
+            write_layer_flashinfer_nhd(
+                spans,
+                paged_kv_cache=self.paged_kv_cache,
+                page_size=self._page_size,
+                layer_idx=layer_idx,
+                k_nhd=k_nhd,
+                v_nhd=v_nhd,
+                touch_page=self._touch_page,
+                perf_add=self._perf_add,
+            )
+        else:
+            write_layer_manual_nhd(
+                spans,
+                paged_kv_cache=self.paged_kv_cache,
+                page_size=self._page_size,
+                layer_idx=layer_idx,
+                k_nhd=k_nhd,
+                v_nhd=v_nhd,
+                touch_page=self._touch_page,
+                perf_add=self._perf_add,
+            )
+
+        self._perf_add("store_write_layer_s", time.perf_counter() - t0)
+        self._perf_add("store_write_layer_calls", 1.0)
+        self._perf_add("store_write_layer_nhd_calls", 1.0)
+        self._perf_add("store_written_tokens", float(total_len))
+        self._perf_add("store_written_spans", float(len(spans)))
+
     def _touch_page(self, span: KVBlockSpan, device: torch.device) -> None:
         page = self._pages.get(span.block_id)
         if page is None:
@@ -364,7 +417,12 @@ class PagedKVBlockStore:
             raise ValueError("layer_idx out of range")
 
         t0 = time.perf_counter()
-        _, num_kv_heads, _, head_dim = k.shape
+        if k.ndim == 4:
+            _, num_kv_heads, _, head_dim = k.shape
+        elif k.ndim == 3:
+            _, num_kv_heads, head_dim = k.shape
+        else:
+            raise ValueError("KV tensor must have BHSD or NHD layout")
         dtype = self._dtype or k.dtype
         device = self._device or k.device
         if self._max_pages > 0:
