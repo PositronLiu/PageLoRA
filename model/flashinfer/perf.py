@@ -207,11 +207,22 @@ class FlashInferPerfTrace:
             + " ".join(f"{name}={aggregate.get(name, 0.0):.6f}" for name in [
                 "total_s",
                 "qkv_s",
+                "input_norm_s",
+                "qkv_project_s",
                 "rope_s",
                 "kv_append_s",
                 "layer_cache_s",
                 "attn_run_s",
                 "post_s",
+                "o_layout_s",
+                "o_proj_s",
+                "post_residual_s",
+                "post_norm_s",
+                "mlp_gate_up_s",
+                "mlp_act_s",
+                "mlp_down_s",
+                "mlp_s",
+                "post_final_residual_s",
             ])
             + " top_total="
             + ",".join(

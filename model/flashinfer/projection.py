@@ -9,6 +9,7 @@ import flashinfer
 import torch
 
 from core.utils import WARNING
+from model.flashinfer.packed_ops import project_qkv_packed
 
 
 @dataclass(frozen=True)
@@ -58,28 +59,49 @@ def project_qkv_with_optional_norm(
     num_kv_heads = int(getattr(config, "num_key_value_heads", num_qo_heads))
     head_dim = int(attn.head_dim)
 
-    q_module = plan.modules.get("self_attn.q_proj") or attn.q_proj
-    k_module = plan.modules.get("self_attn.k_proj") or attn.k_proj
-    v_module = plan.modules.get("self_attn.v_proj") or attn.v_proj
-
-    q_bshd = _project_with_optional_head_norm(
-        projection=q_module,
-        norm=getattr(attn, "q_norm", None),
-        hidden=normed_hidden,
-        num_heads=num_qo_heads,
-        head_dim=head_dim,
-        use_flashinfer_norm=use_flashinfer_norm,
-    )
-    k_bshd = _project_with_optional_head_norm(
-        projection=k_module,
-        norm=getattr(attn, "k_norm", None),
-        hidden=normed_hidden,
-        num_heads=num_kv_heads,
-        head_dim=head_dim,
-        use_flashinfer_norm=use_flashinfer_norm,
-    )
     bsz, seqlen, _ = normed_hidden.shape
-    v_bshd = v_module(normed_hidden).view(bsz, seqlen, num_kv_heads, head_dim)
+    packed_qkv = project_qkv_packed(layer, plan, normed_hidden)
+    if packed_qkv is None:
+        q_module = plan.modules.get("self_attn.q_proj") or attn.q_proj
+        k_module = plan.modules.get("self_attn.k_proj") or attn.k_proj
+        v_module = plan.modules.get("self_attn.v_proj") or attn.v_proj
+
+        q_bshd = _project_with_optional_head_norm(
+            projection=q_module,
+            norm=getattr(attn, "q_norm", None),
+            hidden=normed_hidden,
+            num_heads=num_qo_heads,
+            head_dim=head_dim,
+            use_flashinfer_norm=use_flashinfer_norm,
+        )
+        k_bshd = _project_with_optional_head_norm(
+            projection=k_module,
+            norm=getattr(attn, "k_norm", None),
+            hidden=normed_hidden,
+            num_heads=num_kv_heads,
+            head_dim=head_dim,
+            use_flashinfer_norm=use_flashinfer_norm,
+        )
+        v_bshd = v_module(normed_hidden).view(bsz, seqlen, num_kv_heads, head_dim)
+    else:
+        q_flat, k_flat, v_flat = packed_qkv
+        q_bshd = q_flat.view(bsz, seqlen, num_qo_heads, head_dim)
+        k_bshd = k_flat.view(bsz, seqlen, num_kv_heads, head_dim)
+        q_norm = getattr(attn, "q_norm", None)
+        if q_norm is not None:
+            q_bshd = _apply_optional_head_norm(
+                q_bshd,
+                q_norm,
+                use_flashinfer_norm=use_flashinfer_norm,
+            )
+        k_norm = getattr(attn, "k_norm", None)
+        if k_norm is not None:
+            k_bshd = _apply_optional_head_norm(
+                k_bshd,
+                k_norm,
+                use_flashinfer_norm=use_flashinfer_norm,
+            )
+        v_bshd = v_flat.view(bsz, seqlen, num_kv_heads, head_dim)
     return ProjectedQKV(
         q_bshd=q_bshd,
         k_bshd=k_bshd,
