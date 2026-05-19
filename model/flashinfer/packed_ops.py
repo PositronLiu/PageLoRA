@@ -10,7 +10,7 @@ import flashinfer
 import torch
 import torch.nn.functional as F
 
-from model.flashinfer.effective_weights import effective_linear, effective_packed_linear
+from model.flashinfer.effective_weights import EffectivePackedLinear, effective_linear, effective_packed_linear
 
 
 @dataclass(frozen=True)
@@ -91,6 +91,32 @@ def project_gate_up_packed(
 ) -> torch.Tensor | None:
     """Project MLP gate/up with one packed base linear plus LoRA deltas."""
 
+    packed = get_base_gate_up_packed_linear(mlp)
+    if packed is None:
+        return None
+
+    gate_dim, up_dim = packed.out_features
+    gate_up = F.linear(hidden, packed.weight, packed.bias)
+    if isinstance(packed, EffectivePackedLinear):
+        return gate_up
+    gate_module = getattr(mlp, "gate_proj", None)
+    up_module = getattr(mlp, "up_proj", None)
+    gate_delta = _lora_delta(gate_module, hidden)
+    up_delta = _lora_delta(up_module, hidden)
+    if gate_delta is None and up_delta is None:
+        return gate_up
+
+    gate, up = torch.split(gate_up, [gate_dim, up_dim], dim=-1)
+    if gate_delta is not None:
+        gate = gate + gate_delta
+    if up_delta is not None:
+        up = up + up_delta
+    return torch.cat([gate, up], dim=-1)
+
+
+def get_base_gate_up_packed_linear(mlp: torch.nn.Module) -> PackedLinear | EffectivePackedLinear | None:
+    """Return packed gate/up parameters used by the eager and compiled paths."""
+
     if not packed_mlp_enabled():
         return None
     gate_module = getattr(mlp, "gate_proj", None)
@@ -103,29 +129,13 @@ def project_gate_up_packed(
         modules=(gate_module, up_module),
     )
     if effective is not None:
-        return F.linear(hidden, effective.weight, effective.bias)
+        return effective
 
-    packed = _cached_packed_linear(
+    return _cached_packed_linear(
         owner=mlp,
         attr="_flashinfer_packed_gate_up",
         modules=(gate_module, up_module),
     )
-    if packed is None:
-        return None
-
-    gate_dim, up_dim = packed.out_features
-    gate_up = F.linear(hidden, packed.weight, packed.bias)
-    gate_delta = _lora_delta(gate_module, hidden)
-    up_delta = _lora_delta(up_module, hidden)
-    if gate_delta is None and up_delta is None:
-        return gate_up
-
-    gate, up = torch.split(gate_up, [gate_dim, up_dim], dim=-1)
-    if gate_delta is not None:
-        gate = gate + gate_delta
-    if up_delta is not None:
-        up = up + up_delta
-    return torch.cat([gate, up], dim=-1)
 
 
 def apply_gate_up_activation(

@@ -532,10 +532,17 @@ class LoRARuntime:
         return self._serve_registry[adapter_name][(layer_idx, module_name)]
 
     def _clear_flashinfer_effective_weight_caches(self) -> None:
-        """Clear optional FlashInfer serve-time merged-weight caches."""
+        """Clear optional FlashInfer serve-time merged-weight and compile caches."""
 
         try:
             from model.flashinfer.effective_weights import clear_flashinfer_effective_weight_cache
         except Exception:
+            pass
+        else:
+            clear_flashinfer_effective_weight_cache(self.layer_plans, self.layers)
+
+        try:
+            from model.flashinfer.compile_config import clear_flashinfer_compile_cache
+        except Exception:
             return
-        clear_flashinfer_effective_weight_cache(self.layer_plans, self.layers)
+        clear_flashinfer_compile_cache(self.layer_plans, self.layers)

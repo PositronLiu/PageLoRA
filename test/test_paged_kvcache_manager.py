@@ -152,8 +152,14 @@ def test_paged_kv_flashinfer_append_matches_manual_layout():
     req = mgr.begin_request([1, 2, 3], "general")
     k = torch.arange(1 * 2 * 3 * 128, device=device, dtype=torch.float16).view(1, 2, 3, 128)
     v = k + 1000
-    mgr.append_full(0, k, v, request=req)
-    torch.cuda.synchronize(device)
+    try:
+        mgr.append_full(0, k, v, request=req)
+        torch.cuda.synchronize(device)
+    except RuntimeError as exc:
+        message = str(exc)
+        if "Failed to load dynamic shared library" in message or "GLIBCXX_" in message:
+            pytest.skip(f"flashinfer page append is unavailable: {message}")
+        raise
 
     layer_cache = mgr.layer_cache(0)
     assert layer_cache is not None

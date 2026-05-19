@@ -8,6 +8,8 @@ from typing import Literal
 import torch
 
 from model.flashinfer.attention_backend import FlashInferAttentionBackend
+from model.flashinfer.compiled_mlp import run_compiled_mlp
+from model.flashinfer.compiled_post import run_compiled_post_attention
 from model.flashinfer.norm import apply_rmsnorm
 from model.flashinfer.perf import FlashInferPerfTrace
 from model.flashinfer.projection import (
@@ -100,6 +102,17 @@ def _run_flashinfer_attention(
         perf.add_layer(mode, layer_idx, "attn_run_s", attn_t0)
 
     post_t0 = perf.tic() if perf is not None else time.perf_counter()
+    if mode == "decode":
+        compiled_post_t0 = perf.tic() if perf is not None else time.perf_counter()
+        compiled_result = run_compiled_post_attention(plan, layer, hidden, attn_output)
+        if compiled_result is not None:
+            if perf is not None:
+                perf.add_layer(mode, layer_idx, "compiled_post_s", compiled_post_t0)
+                perf.add_layer(mode, layer_idx, "post_s", post_t0)
+                perf.add_layer(mode, layer_idx, "total_s", layer_t0)
+                perf.count_layer(mode, layer_idx)
+            return compiled_result
+
     o_layout_t0 = perf.tic() if perf is not None else time.perf_counter()
     attn_output = attn_output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
     if perf is not None:
@@ -121,7 +134,7 @@ def _run_flashinfer_attention(
     if perf is not None:
         perf.add_layer(mode, layer_idx, "post_norm_s", post_norm_t0)
 
-    mlp_output = _run_mlp(layer.mlp, mlp_input, mode=mode, layer_idx=layer_idx, perf=perf)
+    mlp_output = _run_mlp(layer.mlp, mlp_input, plan=plan, mode=mode, layer_idx=layer_idx, perf=perf)
     final_residual_t0 = perf.tic() if perf is not None else time.perf_counter()
     result = hidden + mlp_output
     if perf is not None:
@@ -136,10 +149,19 @@ def _run_mlp(
     mlp: torch.nn.Module,
     hidden: torch.Tensor,
     *,
+    plan,
     mode: Literal["prefill", "decode"],
     layer_idx: int,
     perf: FlashInferPerfTrace | None,
 ) -> torch.Tensor:
+    if mode == "decode":
+        compiled_t0 = perf.tic() if perf is not None else time.perf_counter()
+        compiled_output = run_compiled_mlp(plan, mlp, hidden)
+        if compiled_output is not None:
+            if perf is not None:
+                perf.add_layer(mode, layer_idx, "compiled_mlp_s", compiled_t0)
+            return compiled_output
+
     gate_up_t0 = perf.tic() if perf is not None else time.perf_counter()
     gate_up = project_gate_up_packed(mlp, hidden)
     if gate_up is None:
