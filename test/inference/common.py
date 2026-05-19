@@ -59,6 +59,10 @@ class TimedGenerateResult:
     def decode_tokens_per_s(self) -> float:
         return self.generated_tokens / self.decode_s if self.decode_s > 0 else 0.0
 
+    @property
+    def total_tokens_per_s(self) -> float:
+        return self.generated_tokens / self.total_s if self.total_s > 0 else 0.0
+
 
 @dataclass
 class GenerateBenchStats:
@@ -72,6 +76,7 @@ class GenerateBenchStats:
     decode_latencies_s: list[float]
     generated_tokens: list[int]
     tokens_per_s: list[float]
+    throughput_timing: str
 
     @property
     def mean_latency_s(self) -> float:
@@ -494,6 +499,23 @@ def _run_vllm_once(
 ) -> TimedGenerateResult:
     """Run one vLLM generation and return elapsed time plus generated tokens."""
 
+    if getattr(args, "throughput_timing", "decode") == "total":
+        elapsed, generated, outputs = _run_vllm_generate_call(
+            llm,
+            prompt_ids,
+            args,
+            device,
+            lora_request=lora_request,
+            max_tokens=args.max_new_tokens,
+        )
+        metrics_prefill_s, metrics_decode_s = _extract_vllm_split_timing(outputs, elapsed)
+        return TimedGenerateResult(
+            total_s=elapsed,
+            prefill_s=metrics_prefill_s,
+            decode_s=metrics_decode_s,
+            generated_tokens=generated,
+        )
+
     probe_elapsed, _, _ = _run_vllm_generate_call(
         llm,
         prompt_ids,
@@ -584,6 +606,14 @@ def _extract_vllm_split_timing(outputs, elapsed: float) -> tuple[float, float]:
     return 0.0, total_s
 
 
+def _result_tokens_per_s(result: TimedGenerateResult, args: argparse.Namespace) -> float:
+    """Return throughput under the selected timing denominator."""
+
+    if getattr(args, "throughput_timing", "decode") == "total":
+        return result.total_tokens_per_s
+    return result.decode_tokens_per_s
+
+
 def _print_run_result(
     *,
     name: str,
@@ -591,16 +621,19 @@ def _print_run_result(
     run_index: int,
     result: TimedGenerateResult,
     generated_tokens: int,
+    args: argparse.Namespace,
 ) -> None:
     """Print one generation run result immediately for long benchmark jobs."""
 
+    tokens_per_s = _result_tokens_per_s(result, args)
     print(
         f"[{name}] {phase}#{run_index} "
         f"total_s={result.total_s:.4f} "
         f"prefill_s={result.prefill_s:.4f} "
         f"decode_s={result.decode_s:.4f} "
         f"generated_tokens={generated_tokens} "
-        f"decode_tokens_per_s={result.decode_tokens_per_s:.4f}",
+        f"tokens_per_s={tokens_per_s:.4f} "
+        f"throughput_timing={args.throughput_timing}",
         flush=True,
     )
 
@@ -632,6 +665,7 @@ def _benchmark_manager(
             run_index=run_index,
             result=result,
             generated_tokens=result.generated_tokens,
+            args=args,
         )
 
     if hot_flashinfer and args.warmup_runs <= 0:
@@ -642,6 +676,7 @@ def _benchmark_manager(
             run_index=1,
             result=result,
             generated_tokens=result.generated_tokens,
+            args=args,
         )
 
     latencies: list[float] = []
@@ -657,13 +692,14 @@ def _benchmark_manager(
         prefill_latencies.append(result.prefill_s)
         decode_latencies.append(result.decode_s)
         generated_tokens.append(result.generated_tokens)
-        tokens_per_s.append(result.decode_tokens_per_s)
+        tokens_per_s.append(_result_tokens_per_s(result, args))
         _print_run_result(
             name=name,
             phase="measure",
             run_index=run_index,
             result=result,
             generated_tokens=result.generated_tokens,
+            args=args,
         )
 
     return GenerateBenchStats(
@@ -675,6 +711,7 @@ def _benchmark_manager(
         decode_latencies_s=decode_latencies,
         generated_tokens=generated_tokens,
         tokens_per_s=tokens_per_s,
+        throughput_timing=args.throughput_timing,
     )
 
 
@@ -701,6 +738,7 @@ def _benchmark_vllm(
             run_index=run_index,
             result=result,
             generated_tokens=result.generated_tokens,
+            args=args,
         )
 
     latencies: list[float] = []
@@ -714,13 +752,14 @@ def _benchmark_vllm(
         prefill_latencies.append(result.prefill_s)
         decode_latencies.append(result.decode_s)
         generated_tokens.append(result.generated_tokens)
-        tokens_per_s.append(result.decode_tokens_per_s)
+        tokens_per_s.append(_result_tokens_per_s(result, args))
         _print_run_result(
             name=name,
             phase="measure",
             run_index=run_index,
             result=result,
             generated_tokens=result.generated_tokens,
+            args=args,
         )
 
     return GenerateBenchStats(
@@ -732,6 +771,7 @@ def _benchmark_vllm(
         decode_latencies_s=decode_latencies,
         generated_tokens=generated_tokens,
         tokens_per_s=tokens_per_s,
+        throughput_timing=args.throughput_timing,
     )
 
 
@@ -751,7 +791,8 @@ def _print_path_stats(stats: GenerateBenchStats) -> None:
     print(f"p50_decode_s={_percentile(stats.decode_latencies_s, 0.50):.4f}")
     print(f"p95_decode_s={_percentile(stats.decode_latencies_s, 0.95):.4f}")
     print(f"mean_generated_tokens={stats.mean_generated_tokens:.2f}")
-    print(f"mean_decode_tokens_per_s={stats.mean_tokens_per_s:.4f}")
+    print(f"mean_tokens_per_s={stats.mean_tokens_per_s:.4f}")
+    print(f"throughput_timing={stats.throughput_timing}")
 
 
 def _print_pair_comparison(label: str, numerator: GenerateBenchStats, denominator: GenerateBenchStats) -> None:
@@ -823,6 +864,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         metavar="true|false",
         help="Whether to compute selected-token logprobs during benchmark generation.",
+    )
+    parser.add_argument(
+        "--throughput-timing",
+        choices=("decode", "total"),
+        default="decode",
+        help="decode uses generated_tokens/decode_s; total uses generated_tokens/total_s.",
     )
     parser.add_argument(
         "--benchmark-path",
@@ -915,6 +962,7 @@ def run_benchmark(
     print(f"ignore_eos={args.ignore_eos}")
     print(f"sampling_mode={args.sampling_mode}")
     print(f"compute_logprobs={args.compute_logprobs}")
+    print(f"throughput_timing={args.throughput_timing}")
     print(f"benchmark_path={args.benchmark_path}")
     print(f"adapter_role={args.adapter_role}")
     print(f"flashinfer_cache_policy={args.flashinfer_cache_policy}")
