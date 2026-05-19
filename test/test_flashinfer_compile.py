@@ -99,6 +99,29 @@ def test_compiled_mlp_returns_none_when_disabled(monkeypatch):
     assert output is None
 
 
+def test_compiled_mlp_cudagraph_mode_marks_step_and_clones(monkeypatch):
+    class ReturnInput(nn.Module):
+        def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+            return hidden
+
+    marks = []
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_COMPILE_CUDAGRAPHS", "1")
+    monkeypatch.setattr(
+        compiled_mlp,
+        "_get_compiled_mlp",
+        lambda plan, mlp, hidden: compiled_mlp.CompiledMLP(module=ReturnInput(), cache_key=()),
+    )
+    monkeypatch.setattr(compiled_mlp, "mark_compile_step_begin", lambda: marks.append("mark"))
+    hidden = torch.randn(1, 1, 6)
+
+    output = compiled_mlp.run_compiled_mlp(SimpleNamespace(), TinyMLP(), hidden)
+
+    assert marks == ["mark"]
+    assert output is not hidden
+    assert output.data_ptr() != hidden.data_ptr()
+    assert torch.allclose(output, hidden)
+
+
 def test_compiled_post_attention_matches_eager_and_reuses_cache(monkeypatch):
     monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_COMPILE_POST", "1")
     monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_PACKED_MLP", "1")
@@ -130,6 +153,30 @@ def test_compiled_post_attention_matches_eager_and_reuses_cache(monkeypatch):
     assert len(compile_calls) == 1
     assert torch.allclose(output, expected, rtol=1e-5, atol=1e-5)
     assert torch.allclose(cached_output, output, rtol=1e-5, atol=1e-5)
+
+
+def test_compiled_post_cudagraph_mode_marks_step_and_clones(monkeypatch):
+    class ReturnHidden(nn.Module):
+        def forward(self, hidden: torch.Tensor, attn_output: torch.Tensor) -> torch.Tensor:
+            return hidden
+
+    marks = []
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_COMPILE_CUDAGRAPHS", "1")
+    monkeypatch.setattr(
+        compiled_post,
+        "_get_compiled_post_attention",
+        lambda plan, layer, hidden: compiled_post.CompiledPostAttention(module=ReturnHidden(), cache_key=()),
+    )
+    monkeypatch.setattr(compiled_post, "mark_compile_step_begin", lambda: marks.append("mark"))
+    hidden = torch.randn(1, 1, 6)
+    attn_output = torch.randn(1, 2, 1, 3)
+
+    output = compiled_post.run_compiled_post_attention(SimpleNamespace(), TinyLayer(), hidden, attn_output)
+
+    assert marks == ["mark"]
+    assert output is not hidden
+    assert output.data_ptr() != hidden.data_ptr()
+    assert torch.allclose(output, hidden)
 
 
 def test_clear_compile_cache_walks_plans_and_layers():

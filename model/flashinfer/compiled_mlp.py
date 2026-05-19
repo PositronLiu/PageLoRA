@@ -11,6 +11,8 @@ from core.utils import WARNING
 from model.flashinfer.compile_config import (
     can_compile_decode_tensor,
     compile_module,
+    mark_compile_step_begin,
+    torch_compile_clone_outputs,
     torch_compile_mlp_enabled,
 )
 from model.flashinfer.static_params import StaticMLPParams, resolve_mlp_params
@@ -46,7 +48,9 @@ def run_compiled_mlp(plan, mlp: torch.nn.Module, hidden: torch.Tensor) -> torch.
     if compiled is None:
         return None
     try:
-        return compiled.module(hidden)
+        mark_compile_step_begin()
+        output = compiled.module(hidden)
+        return output.clone() if torch_compile_clone_outputs() else output
     except Exception as exc:  # pragma: no cover - depends on torch.compile backend
         setattr(plan, "_flashinfer_compile_mlp_disabled", True)
         WARNING(f"FlashInfer compiled MLP disabled after runtime failure: {exc}")

@@ -11,6 +11,8 @@ from core.utils import WARNING
 from model.flashinfer.compile_config import (
     can_compile_decode_tensor,
     compile_module,
+    mark_compile_step_begin,
+    torch_compile_clone_outputs,
     torch_compile_post_enabled,
 )
 from model.flashinfer.static_params import StaticPostParams, resolve_post_params
@@ -60,7 +62,9 @@ def run_compiled_post_attention(
     if compiled is None:
         return None
     try:
-        return compiled.module(hidden, attn_output)
+        mark_compile_step_begin()
+        output = compiled.module(hidden, attn_output)
+        return output.clone() if torch_compile_clone_outputs() else output
     except Exception as exc:  # pragma: no cover - depends on torch.compile backend
         setattr(plan, "_flashinfer_compile_post_disabled", True)
         WARNING(f"FlashInfer compiled post-attention disabled after runtime failure: {exc}")
