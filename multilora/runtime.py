@@ -310,17 +310,30 @@ class LoRARuntime:
 
         return self.current_train_owner
 
-    def prepare_train_workspace(self, adapter_name: str, device: torch.device | None = None) -> bool:
+    def prepare_train_workspace(
+        self,
+        adapter_name: str,
+        device: torch.device | None = None,
+        *,
+        force: bool = False,
+    ) -> bool:
         """Create or reuse the global train workspace for one logical adapter.
 
         Returns ``True`` when the workspace was freshly materialized and callers
         should rebuild train-time state such as the optimizer parameter list.
+
+        When *force* is True and the workspace belongs to a different adapter,
+        the old workspace is released before creating the new one, enabling
+        time-sliced multi-agent training.
         """
 
         if self.current_train_owner is not None and self.current_train_owner != adapter_name:
-            raise RuntimeError(
-                f"train workspace already belongs to {self.current_train_owner}; cannot switch to {adapter_name}"
-            )
+            if not force:
+                raise RuntimeError(
+                    f"train workspace already belongs to {self.current_train_owner}; "
+                    f"cannot switch to {adapter_name}"
+                )
+            self.clear_train_workspace()
 
         already_materialized = all(module.has_train_workspace() for _, _, module in self._manual_modules)
         if self.current_train_owner == adapter_name and already_materialized:
