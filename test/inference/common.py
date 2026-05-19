@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import inspect
 import os
 import random
 import statistics
@@ -366,6 +367,8 @@ def _run_hf_generate_once(
     model = manager.model
     tokenizer = manager.tokenizer
     device = manager.device
+    forward_parameters = inspect.signature(model.forward).parameters
+    supports_cache_position = "cache_position" in forward_parameters
     input_ids = torch.tensor([prompt_ids], device=device, dtype=torch.long)
     attention_mask = torch.ones_like(input_ids)
     context_adapter = None if args.adapter_role == AdapterRole.BASE.value else "general"
@@ -436,21 +439,18 @@ def _run_hf_generate_once(
                         [attention_mask, torch.ones((1, 1), device=device, dtype=attention_mask.dtype)],
                         dim=1,
                     )
-                    prepare_inputs = getattr(model, "prepare_inputs_for_generation", None)
-                    if callable(prepare_inputs):
-                        model_inputs = prepare_inputs(
-                            token_input,
-                            past_key_values=past_key_values,
-                            attention_mask=attention_mask,
-                            use_cache=True,
+                    model_inputs = {
+                        "input_ids": token_input,
+                        "past_key_values": past_key_values,
+                        "attention_mask": attention_mask,
+                        "use_cache": True,
+                    }
+                    if supports_cache_position:
+                        model_inputs["cache_position"] = torch.tensor(
+                            [attention_mask.size(1) - 1],
+                            device=device,
+                            dtype=torch.long,
                         )
-                    else:
-                        model_inputs = {
-                            "input_ids": token_input,
-                            "past_key_values": past_key_values,
-                            "attention_mask": attention_mask,
-                            "use_cache": True,
-                        }
                     outputs = model(**model_inputs, return_dict=True)
                     logits = outputs.logits[:, -1, :]
                     past_key_values = outputs.past_key_values
