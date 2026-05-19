@@ -494,10 +494,54 @@ def _run_vllm_once(
 ) -> TimedGenerateResult:
     """Run one vLLM generation and return elapsed time plus generated tokens."""
 
+    probe_elapsed, _, _ = _run_vllm_generate_call(
+        llm,
+        prompt_ids,
+        args,
+        device,
+        lora_request=lora_request,
+        max_tokens=1,
+    )
+    elapsed, generated, outputs = _run_vllm_generate_call(
+        llm,
+        prompt_ids,
+        args,
+        device,
+        lora_request=lora_request,
+        max_tokens=args.max_new_tokens,
+    )
+    metrics_prefill_s, metrics_decode_s = _extract_vllm_split_timing(outputs, elapsed)
+    if metrics_prefill_s > 0.0 and metrics_decode_s > 0.0:
+        prefill_s = metrics_prefill_s
+        decode_s = metrics_decode_s
+    else:
+        prefill_s = probe_elapsed
+        decode_s = max(0.0, elapsed - prefill_s)
+    return TimedGenerateResult(
+        total_s=elapsed,
+        prefill_s=prefill_s,
+        decode_s=decode_s,
+        generated_tokens=generated,
+    )
+
+
+def _run_vllm_generate_call(
+    llm,
+    prompt_ids: list[int],
+    args: argparse.Namespace,
+    device: torch.device,
+    *,
+    lora_request=None,
+    max_tokens: int,
+):
+    """Run one raw vLLM generate call."""
+
     from vllm import SamplingParams
     from vllm.inputs import TokensPrompt
 
-    sampling_params = SamplingParams(**_vllm_sampling_kwargs(args))
+    sampling_kwargs = _vllm_sampling_kwargs(args)
+    sampling_kwargs["max_tokens"] = max_tokens
+    sampling_params = SamplingParams(**sampling_kwargs)
     prompt = TokensPrompt(prompt_token_ids=prompt_ids)
     _sync_if_cuda(device)
     started = time.perf_counter()
@@ -512,19 +556,13 @@ def _run_vllm_once(
     generated = 0
     if outputs and outputs[0].outputs:
         generated = len(outputs[0].outputs[0].token_ids)
-    prefill_s, decode_s = _extract_vllm_split_timing(outputs, started, started + elapsed)
-    return TimedGenerateResult(
-        total_s=elapsed,
-        prefill_s=prefill_s,
-        decode_s=decode_s,
-        generated_tokens=generated,
-    )
+    return elapsed, generated, outputs
 
 
-def _extract_vllm_split_timing(outputs, started: float, ended: float) -> tuple[float, float]:
+def _extract_vllm_split_timing(outputs, elapsed: float) -> tuple[float, float]:
     """Extract TTFT/decode split from vLLM RequestOutput metrics when available."""
 
-    total_s = max(0.0, ended - started)
+    total_s = max(0.0, elapsed)
     if not outputs:
         return 0.0, total_s
     metrics = getattr(outputs[0], "metrics", None)
@@ -533,20 +571,16 @@ def _extract_vllm_split_timing(outputs, started: float, ended: float) -> tuple[f
     first_token_time = getattr(metrics, "first_token_time", None)
     finished_time = getattr(metrics, "finished_time", None)
     arrival_time = getattr(metrics, "arrival_time", None)
-    if isinstance(first_token_time, (int, float)):
-        if started <= first_token_time <= ended:
-            prefill_s = max(0.0, float(first_token_time) - started)
-            decode_s = max(0.0, ended - float(first_token_time))
-            return prefill_s, decode_s
-        if (
-            isinstance(arrival_time, (int, float))
-            and isinstance(finished_time, (int, float))
-            and arrival_time <= first_token_time <= finished_time
-        ):
-            return (
-                max(0.0, float(first_token_time) - float(arrival_time)),
-                max(0.0, float(finished_time) - float(first_token_time)),
-            )
+    if (
+        isinstance(first_token_time, (int, float))
+        and isinstance(arrival_time, (int, float))
+        and isinstance(finished_time, (int, float))
+        and arrival_time <= first_token_time <= finished_time
+    ):
+        return (
+            max(0.0, float(first_token_time) - float(arrival_time)),
+            max(0.0, float(finished_time) - float(first_token_time)),
+        )
     return 0.0, total_s
 
 
