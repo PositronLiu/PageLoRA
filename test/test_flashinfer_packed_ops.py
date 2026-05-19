@@ -52,6 +52,7 @@ def test_packed_qkv_matches_three_linear_projections(monkeypatch):
 def test_packed_qkv_preserves_lora_delta(monkeypatch):
     monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_PACKED_QKV", "1")
     monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_EFFECTIVE_WEIGHTS", "0")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_PACKED_LORA_DELTA", "1")
     q_proj = LoRALinear(_linear(6, 8, bias=False), rank=2, alpha=4.0, dropout=0.0)
     k_proj = LoRALinear(_linear(6, 4, bias=False), rank=2, alpha=4.0, dropout=0.0)
     v_proj = LoRALinear(_linear(6, 4, bias=False), rank=2, alpha=4.0, dropout=0.0)
@@ -81,6 +82,45 @@ def test_packed_qkv_preserves_lora_delta(monkeypatch):
     _assert_close(projected.q_bshd.reshape(1, 2, 8), q_proj(hidden))
     _assert_close(projected.k_bshd.reshape(1, 2, 4), k_proj(hidden))
     _assert_close(projected.v_bshd.reshape(1, 2, 4), v_proj(hidden))
+    packed_lora = getattr(plan, "_flashinfer_packed_qkv_lora_delta")
+    assert packed_lora.a.shape == (6, 6)
+    assert packed_lora.b.shape == (16, 6)
+
+
+def test_packed_qkv_lora_delta_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_PACKED_QKV", "1")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_EFFECTIVE_WEIGHTS", "0")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_PACKED_LORA_DELTA", "0")
+    q_proj = LoRALinear(_linear(6, 8, bias=False), rank=2, alpha=4.0, dropout=0.0)
+    k_proj = LoRALinear(_linear(6, 4, bias=False), rank=2, alpha=4.0, dropout=0.0)
+    v_proj = LoRALinear(_linear(6, 4, bias=False), rank=2, alpha=4.0, dropout=0.0)
+    for module in (q_proj, k_proj, v_proj):
+        module.bind_serve(
+            nn.Parameter(torch.full((2, 6), 0.1), requires_grad=False),
+            nn.Parameter(torch.full((module.out_features, 2), 0.2), requires_grad=False),
+        )
+        module.set_active_serve()
+    attn = SimpleNamespace(
+        config=SimpleNamespace(num_attention_heads=2, num_key_value_heads=1),
+        head_dim=4,
+        q_proj=q_proj,
+        k_proj=k_proj,
+        v_proj=v_proj,
+    )
+    layer = SimpleNamespace(self_attn=attn)
+    plan = SimpleNamespace(modules={
+        "self_attn.q_proj": q_proj,
+        "self_attn.k_proj": k_proj,
+        "self_attn.v_proj": v_proj,
+    })
+    hidden = torch.randn(1, 2, 6)
+
+    projected = project_qkv_with_optional_norm(layer, plan, hidden)
+
+    _assert_close(projected.q_bshd.reshape(1, 2, 8), q_proj(hidden))
+    _assert_close(projected.k_bshd.reshape(1, 2, 4), k_proj(hidden))
+    _assert_close(projected.v_bshd.reshape(1, 2, 4), v_proj(hidden))
+    assert not hasattr(plan, "_flashinfer_packed_qkv_lora_delta")
 
 
 def test_effective_qkv_matches_lora_forward(monkeypatch):
@@ -180,6 +220,42 @@ def test_packed_gate_up_mlp_matches_reference(monkeypatch):
 
     _assert_close(output, mlp(hidden))
     assert getattr(mlp, "_flashinfer_packed_gate_up").weight.shape == (10, 6)
+
+
+class _TinyLoRAMLP(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate_proj = LoRALinear(_linear(6, 5, bias=True), rank=2, alpha=4.0, dropout=0.0)
+        self.up_proj = LoRALinear(_linear(6, 5, bias=True), rank=2, alpha=4.0, dropout=0.0)
+        self.down_proj = _linear(5, 6, bias=True)
+        self.act_fn = nn.SiLU()
+        for index, module in enumerate((self.gate_proj, self.up_proj), start=1):
+            module.bind_serve(
+                nn.Parameter(torch.full((2, 6), 0.03 * index), requires_grad=False),
+                nn.Parameter(torch.full((5, 2), 0.04 * index), requires_grad=False),
+            )
+            module.set_active_serve()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+
+
+def test_packed_gate_up_preserves_lora_delta(monkeypatch):
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_PACKED_MLP", "1")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_EFFECTIVE_WEIGHTS", "0")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_PACKED_LORA_DELTA", "1")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_FUSED_ACT", "0")
+    mlp = _TinyLoRAMLP()
+    hidden = torch.randn(2, 3, 6)
+
+    gate_up = packed_ops.project_gate_up_packed(mlp, hidden)
+    activated = packed_ops.apply_gate_up_activation(gate_up, mlp.act_fn)
+    output = packed_ops.project_down(mlp, activated)
+
+    _assert_close(output, mlp(hidden))
+    packed_lora = getattr(mlp, "_flashinfer_packed_gate_up_lora_delta")
+    assert packed_lora.a.shape == (4, 6)
+    assert packed_lora.b.shape == (10, 4)
 
 
 def test_apply_gate_up_activation_fallback_matches_silu(monkeypatch):

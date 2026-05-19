@@ -23,12 +23,26 @@ class PackedLinear:
     cache_key: tuple[object, ...]
 
 
+@dataclass(frozen=True)
+class PackedLoRADelta:
+    """Cached packed LoRA delta parameters for grouped projections."""
+
+    a: torch.Tensor
+    b: torch.Tensor
+    out_features: tuple[int, ...]
+    cache_key: tuple[object, ...]
+
+
 def packed_qkv_enabled() -> bool:
     return _env_enabled("MINI_OPENCLAW_FLASHINFER_PACKED_QKV", default=True)
 
 
 def packed_mlp_enabled() -> bool:
     return _env_enabled("MINI_OPENCLAW_FLASHINFER_PACKED_MLP", default=True)
+
+
+def packed_lora_delta_enabled() -> bool:
+    return _env_enabled("MINI_OPENCLAW_FLASHINFER_PACKED_LORA_DELTA", default=True)
 
 
 def fused_activation_enabled() -> bool:
@@ -72,7 +86,18 @@ def project_qkv_packed(
 
     q_dim, k_dim, v_dim = packed.out_features
     qkv = F.linear(hidden, packed.weight, packed.bias)
+    packed_delta = _packed_lora_delta(
+        owner=plan,
+        attr="_flashinfer_packed_qkv_lora_delta",
+        modules=(q_module, k_module, v_module),
+        hidden=hidden,
+    )
+    if packed_delta is not None:
+        qkv = qkv + packed_delta
     q, k, v = torch.split(qkv, [q_dim, k_dim, v_dim], dim=-1)
+    if packed_delta is not None:
+        return q, k, v
+
     q_delta = _lora_delta(q_module, hidden)
     if q_delta is not None:
         q = q + q_delta
@@ -101,6 +126,15 @@ def project_gate_up_packed(
         return gate_up
     gate_module = getattr(mlp, "gate_proj", None)
     up_module = getattr(mlp, "up_proj", None)
+    packed_delta = _packed_lora_delta(
+        owner=mlp,
+        attr="_flashinfer_packed_gate_up_lora_delta",
+        modules=(gate_module, up_module),
+        hidden=hidden,
+    )
+    if packed_delta is not None:
+        return gate_up + packed_delta
+
     gate_delta = _lora_delta(gate_module, hidden)
     up_delta = _lora_delta(up_module, hidden)
     if gate_delta is None and up_delta is None:
@@ -213,6 +247,79 @@ def _cached_packed_linear(
     return packed
 
 
+def _packed_lora_delta(
+    *,
+    owner: object,
+    attr: str,
+    modules: tuple[torch.nn.Module, ...],
+    hidden: torch.Tensor,
+) -> torch.Tensor | None:
+    packed = _cached_packed_lora_delta(owner=owner, attr=attr, modules=modules)
+    if packed is None:
+        return None
+    down = F.linear(hidden, packed.a, None)
+    return F.linear(down, packed.b, None)
+
+
+def _cached_packed_lora_delta(
+    *,
+    owner: object,
+    attr: str,
+    modules: tuple[torch.nn.Module, ...],
+) -> PackedLoRADelta | None:
+    if not packed_lora_delta_enabled():
+        return None
+    infos = [_lora_pack_info(module) for module in modules]
+    if any(info is None for info in infos):
+        return None
+    lora_infos = [info for info in infos if info is not None]
+    if not lora_infos:
+        return None
+
+    first_a, _first_b, _first_scale, _first_key = lora_infos[0]
+    in_features = first_a.size(1)
+    device = first_a.device
+    dtype = first_a.dtype
+    for a, b, _scale, _key in lora_infos:
+        if a.ndim != 2 or b.ndim != 2:
+            return None
+        if a.size(1) != in_features or b.size(1) != a.size(0):
+            return None
+        if a.device != device or b.device != device or a.dtype != dtype or b.dtype != dtype:
+            return None
+
+    cache_key = ("packed_lora_delta", tuple(key for _a, _b, _scale, key in lora_infos))
+    cached = getattr(owner, attr, None)
+    if isinstance(cached, PackedLoRADelta) and cached.cache_key == cache_key:
+        return cached
+
+    ranks = tuple(a.size(0) for a, _b, _scale, _key in lora_infos)
+    out_features = tuple(b.size(0) for _a, b, _scale, _key in lora_infos)
+    packed_a = torch.cat([a.detach() for a, _b, _scale, _key in lora_infos], dim=0).contiguous()
+    packed_b = torch.zeros(
+        (sum(out_features), sum(ranks)),
+        device=device,
+        dtype=dtype,
+    )
+    out_offset = 0
+    rank_offset = 0
+    for (_a, b, scale, _key), out_dim, rank in zip(lora_infos, out_features, ranks):
+        packed_b[out_offset : out_offset + out_dim, rank_offset : rank_offset + rank].copy_(
+            b.detach() * scale
+        )
+        out_offset += out_dim
+        rank_offset += rank
+
+    packed = PackedLoRADelta(
+        a=packed_a,
+        b=packed_b.contiguous(),
+        out_features=out_features,
+        cache_key=cache_key,
+    )
+    setattr(owner, attr, packed)
+    return packed
+
+
 def _can_functional_linear(module: torch.nn.Module) -> bool:
     weight = getattr(module, "weight", None)
     return isinstance(weight, torch.Tensor) and weight.ndim == 2
@@ -257,6 +364,63 @@ def _packed_cache_key(modules: Iterable[torch.nn.Module]) -> tuple[object, ...]:
         else:
             pieces.extend([bias.data_ptr(), tuple(bias.shape), bias.dtype, bias.device])
     return tuple(pieces)
+
+
+def _lora_pack_info(
+    module: torch.nn.Module | None,
+) -> tuple[torch.Tensor, torch.Tensor, float, tuple[object, ...]] | None:
+    if module is None:
+        return None
+    active_role = getattr(module, "active_role", "base")
+    if active_role != "serve":
+        return None
+    if not _lora_dropout_is_identity(module):
+        return None
+    a = getattr(module, "serve_a", None)
+    b = getattr(module, "serve_b", None)
+    if not isinstance(a, torch.Tensor) or not isinstance(b, torch.Tensor):
+        return None
+    if a.ndim != 2 or b.ndim != 2:
+        return None
+    scale = float(getattr(module, "scale", 1.0))
+    cache_key = (
+        id(module),
+        active_role,
+        _tensor_cache_key(a),
+        _tensor_cache_key(b),
+        scale,
+        _dropout_cache_key(getattr(module, "dropout", None)),
+    )
+    return a, b, scale, cache_key
+
+
+def _lora_dropout_is_identity(module: torch.nn.Module) -> bool:
+    dropout = getattr(module, "dropout", None)
+    if dropout is None:
+        return True
+    if isinstance(dropout, torch.nn.Identity):
+        return True
+    if isinstance(dropout, torch.nn.Dropout):
+        return float(dropout.p) == 0.0 or not dropout.training
+    return False
+
+
+def _dropout_cache_key(dropout: object) -> tuple[object, ...] | None:
+    if dropout is None:
+        return None
+    p = float(getattr(dropout, "p", 0.0))
+    training = bool(getattr(dropout, "training", False))
+    return (dropout.__class__.__name__, p, training)
+
+
+def _tensor_cache_key(tensor: torch.Tensor) -> tuple[object, ...]:
+    return (
+        tensor.data_ptr(),
+        tuple(tensor.shape),
+        tensor.dtype,
+        tensor.device,
+        int(getattr(tensor, "_version", 0)),
+    )
 
 
 def _lora_delta(module: torch.nn.Module, hidden: torch.Tensor) -> torch.Tensor | None:
