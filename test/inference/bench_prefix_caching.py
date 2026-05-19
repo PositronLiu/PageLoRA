@@ -214,15 +214,15 @@ def _run_flashinfer_prefix_mode(args: argparse.Namespace, device: torch.device, 
             if args.prefix_reset_cache_between_runs:
                 _invalidate_adapter_cache(manager, "general")
             for request_index, ids in enumerate(prompt_ids, start=1):
-                elapsed, token_count = _run_generate_once(manager, ids, args)
+                result = _run_generate_once(manager, ids, args)
                 _print_prefix_request(
                     name=name,
                     phase="warmup",
                     sequence_index=sequence_index,
                     request_index=request_index,
                     prompt_tokens=len(ids),
-                    elapsed=elapsed,
-                    generated_tokens=token_count,
+                    elapsed=result.total_s,
+                    generated_tokens=result.generated_tokens,
                 )
 
         latencies: list[float] = []
@@ -232,9 +232,9 @@ def _run_flashinfer_prefix_mode(args: argparse.Namespace, device: torch.device, 
             if args.prefix_reset_cache_between_runs:
                 _invalidate_adapter_cache(manager, "general")
             for request_index, ids in enumerate(prompt_ids, start=1):
-                elapsed, token_count = _run_generate_once(manager, ids, args)
-                latencies.append(elapsed)
-                generated_tokens.append(token_count)
+                result = _run_generate_once(manager, ids, args)
+                latencies.append(result.total_s)
+                generated_tokens.append(result.generated_tokens)
                 prompt_token_counts.append(len(ids))
                 _print_prefix_request(
                     name=name,
@@ -242,8 +242,8 @@ def _run_flashinfer_prefix_mode(args: argparse.Namespace, device: torch.device, 
                     sequence_index=sequence_index,
                     request_index=request_index,
                     prompt_tokens=len(ids),
-                    elapsed=elapsed,
-                    generated_tokens=token_count,
+                    elapsed=result.total_s,
+                    generated_tokens=result.generated_tokens,
                 )
         return PrefixBenchStats(
             name=name,
@@ -274,15 +274,15 @@ def _run_vllm_prefix_mode(args: argparse.Namespace, device: torch.device, *, mod
         print(f"\n[{name}] prompt_tokens={[len(ids) for ids in prompt_ids]}", flush=True)
         for sequence_index in range(1, max(0, args.warmup_runs) + 1):
             for request_index, ids in enumerate(prompt_ids, start=1):
-                elapsed, token_count = _run_vllm_once(llm, ids, args, device, lora_request=lora_request)
+                result = _run_vllm_once(llm, ids, args, device, lora_request=lora_request)
                 _print_prefix_request(
                     name=name,
                     phase="warmup",
                     sequence_index=sequence_index,
                     request_index=request_index,
                     prompt_tokens=len(ids),
-                    elapsed=elapsed,
-                    generated_tokens=token_count,
+                    elapsed=result.total_s,
+                    generated_tokens=result.generated_tokens,
                 )
 
         latencies: list[float] = []
@@ -290,9 +290,9 @@ def _run_vllm_prefix_mode(args: argparse.Namespace, device: torch.device, *, mod
         prompt_token_counts: list[int] = []
         for sequence_index in range(1, max(1, args.measure_runs) + 1):
             for request_index, ids in enumerate(prompt_ids, start=1):
-                elapsed, token_count = _run_vllm_once(llm, ids, args, device, lora_request=lora_request)
-                latencies.append(elapsed)
-                generated_tokens.append(token_count)
+                result = _run_vllm_once(llm, ids, args, device, lora_request=lora_request)
+                latencies.append(result.total_s)
+                generated_tokens.append(result.generated_tokens)
                 prompt_token_counts.append(len(ids))
                 _print_prefix_request(
                     name=name,
@@ -300,8 +300,8 @@ def _run_vllm_prefix_mode(args: argparse.Namespace, device: torch.device, *, mod
                     sequence_index=sequence_index,
                     request_index=request_index,
                     prompt_tokens=len(ids),
-                    elapsed=elapsed,
-                    generated_tokens=token_count,
+                    elapsed=result.total_s,
+                    generated_tokens=result.generated_tokens,
                 )
         return PrefixBenchStats(
             name=name,

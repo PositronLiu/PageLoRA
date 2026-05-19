@@ -382,6 +382,14 @@ def generate_with_flashinfer_kvcache(
         response_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
         perf.add("decode_text_s", text_t0)
         perf.add("generation_total_s", generation_t0)
+        prefill_s = (
+            perf.sections.get("backend_create_s", 0.0)
+            + perf.sections.get("begin_request_s", 0.0)
+            + perf.sections.get("prefill_total_s", 0.0)
+            + perf.sections.get("prefill_lm_head_s", 0.0)
+        )
+        decode_s = perf.sections.get("decode_total_s", 0.0)
+        total_s = perf.sections.get("generation_total_s", 0.0)
         perf.log_summary(
             prompt_tokens=len(prompt_ids),
             prefill_tokens=len(new_ids),
@@ -396,6 +404,11 @@ def generate_with_flashinfer_kvcache(
             response_text=response_text,
             response_ids=generated_ids,
             logprobs=logprobs,
+            timings={
+                "total_s": total_s,
+                "prefill_s": prefill_s,
+                "decode_s": decode_s,
+            },
         )
     finally:
         if not committed:

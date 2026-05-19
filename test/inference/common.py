@@ -46,6 +46,20 @@ def _parse_bool(value: str) -> bool:
 
 
 @dataclass
+class TimedGenerateResult:
+    """Timing for one generation request split into prefill and decode."""
+
+    total_s: float
+    prefill_s: float
+    decode_s: float
+    generated_tokens: int
+
+    @property
+    def decode_tokens_per_s(self) -> float:
+        return self.generated_tokens / self.decode_s if self.decode_s > 0 else 0.0
+
+
+@dataclass
 class GenerateBenchStats:
     """Aggregated latency and throughput numbers for one generation path."""
 
@@ -53,6 +67,8 @@ class GenerateBenchStats:
     load_time_s: float
     prompt_tokens: int
     latencies_s: list[float]
+    prefill_latencies_s: list[float]
+    decode_latencies_s: list[float]
     generated_tokens: list[int]
     tokens_per_s: list[float]
 
@@ -63,6 +79,14 @@ class GenerateBenchStats:
     @property
     def mean_tokens_per_s(self) -> float:
         return statistics.mean(self.tokens_per_s)
+
+    @property
+    def mean_prefill_s(self) -> float:
+        return statistics.mean(self.prefill_latencies_s)
+
+    @property
+    def mean_decode_s(self) -> float:
+        return statistics.mean(self.decode_latencies_s)
 
     @property
     def mean_generated_tokens(self) -> float:
@@ -288,7 +312,7 @@ def _run_generate_once(
     manager: ModelManager,
     prompt_ids: list[int],
     args: argparse.Namespace,
-) -> tuple[float, int]:
+) -> TimedGenerateResult:
     """Run one deterministic generation and return elapsed time plus tokens."""
 
     from model.generation import generate_with_logprobs
@@ -307,10 +331,138 @@ def _run_generate_once(
         ignore_eos=args.ignore_eos,
         sampling_mode=args.sampling_mode,
         compute_logprobs=args.compute_logprobs,
+        adapter_role=args.adapter_role,
     )
     _sync_if_cuda(manager.device)
     elapsed = time.perf_counter() - started
-    return elapsed, len(output.response_ids)
+    output_timings = getattr(output, "timings", {}) or {}
+    prefill_s = float(output_timings.get("prefill_s", 0.0))
+    decode_s = float(output_timings.get("decode_s", 0.0))
+    if decode_s <= 0.0:
+        decode_s = max(0.0, elapsed - prefill_s)
+    if prefill_s <= 0.0:
+        prefill_s = max(0.0, elapsed - decode_s)
+    return TimedGenerateResult(
+        total_s=elapsed,
+        prefill_s=prefill_s,
+        decode_s=decode_s,
+        generated_tokens=len(output.response_ids),
+    )
+
+
+def _run_hf_generate_once(
+    manager: ModelManager,
+    prompt_ids: list[int],
+    args: argparse.Namespace,
+) -> TimedGenerateResult:
+    """Run HF model forward with KV cache and explicit prefill/decode timing."""
+
+    from model.generation import _sample_next_tokens
+    from multilora.runtime import AdapterRole
+
+    if args.sampling_mode == "flashinfer_topk_topp":
+        raise ValueError("--sampling-mode flashinfer_topk_topp cannot be used with hf paths")
+
+    model = manager.model
+    tokenizer = manager.tokenizer
+    device = manager.device
+    input_ids = torch.tensor([prompt_ids], device=device, dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids)
+    context_adapter = None if args.adapter_role == AdapterRole.BASE.value else "general"
+    token_histories: list[list[int]] | None = None
+    if not (
+        args.sampling_mode == "greedy_fast"
+        and not args.compute_logprobs
+        and args.repetition_penalty == 1.0
+    ):
+        token_histories = [list(prompt_ids)]
+
+    _sync_if_cuda(device)
+    total_t0 = time.perf_counter()
+    with manager.use_adapter(adapter_name=context_adapter, role=args.adapter_role):
+        with manager.inference_session(enable_cache=True):
+            with torch.no_grad():
+                prefill_t0 = time.perf_counter()
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    use_cache=True,
+                    return_dict=True,
+                )
+                _sync_if_cuda(device)
+                prefill_s = time.perf_counter() - prefill_t0
+                logits = outputs.logits[:, -1, :]
+                past_key_values = outputs.past_key_values
+
+                generated_ids: list[int] = []
+                logprobs: list[float] = []
+                decode_t0 = time.perf_counter()
+                for step in range(args.max_new_tokens):
+                    if (
+                        args.sampling_mode == "greedy_fast"
+                        and not args.compute_logprobs
+                        and args.repetition_penalty == 1.0
+                    ):
+                        next_token_tensor = torch.argmax(logits, dim=-1)
+                        next_logprobs: list[float] = []
+                    else:
+                        if token_histories is None:
+                            raise RuntimeError("token histories must be initialized outside fast greedy mode")
+                        next_tokens, next_logprobs = _sample_next_tokens(
+                            logits,
+                            token_histories=token_histories,
+                            temperature=args.temperature,
+                            top_p=args.top_p,
+                            top_k=args.top_k,
+                            repetition_penalty=args.repetition_penalty,
+                            sampling_mode=args.sampling_mode,
+                            compute_logprobs=args.compute_logprobs,
+                        )
+                        next_token_tensor = torch.tensor(next_tokens, device=device, dtype=torch.long)
+
+                    token_id = int(next_token_tensor[0].item())
+                    generated_ids.append(token_id)
+                    if args.compute_logprobs and next_logprobs:
+                        logprobs.append(next_logprobs[0])
+                    if token_histories is not None:
+                        token_histories[0].append(token_id)
+                    if not args.ignore_eos and token_id == tokenizer.eos_token_id:
+                        break
+                    if step + 1 >= args.max_new_tokens:
+                        break
+
+                    token_input = next_token_tensor.view(1, 1)
+                    attention_mask = torch.cat(
+                        [attention_mask, torch.ones((1, 1), device=device, dtype=attention_mask.dtype)],
+                        dim=1,
+                    )
+                    prepare_inputs = getattr(model, "prepare_inputs_for_generation", None)
+                    if callable(prepare_inputs):
+                        model_inputs = prepare_inputs(
+                            token_input,
+                            past_key_values=past_key_values,
+                            attention_mask=attention_mask,
+                            use_cache=True,
+                        )
+                    else:
+                        model_inputs = {
+                            "input_ids": token_input,
+                            "past_key_values": past_key_values,
+                            "attention_mask": attention_mask,
+                            "use_cache": True,
+                        }
+                    outputs = model(**model_inputs, return_dict=True)
+                    logits = outputs.logits[:, -1, :]
+                    past_key_values = outputs.past_key_values
+                _sync_if_cuda(device)
+                decode_s = time.perf_counter() - decode_t0
+    total_s = time.perf_counter() - total_t0
+    return TimedGenerateResult(
+        total_s=total_s,
+        prefill_s=prefill_s,
+        decode_s=decode_s,
+        generated_tokens=len(generated_ids),
+    )
 
 
 def _vllm_sampling_kwargs(args: argparse.Namespace) -> dict[str, object]:
@@ -339,7 +491,7 @@ def _run_vllm_once(
     device: torch.device,
     *,
     lora_request=None,
-) -> tuple[float, int]:
+) -> TimedGenerateResult:
     """Run one vLLM generation and return elapsed time plus generated tokens."""
 
     from vllm import SamplingParams
@@ -360,7 +512,42 @@ def _run_vllm_once(
     generated = 0
     if outputs and outputs[0].outputs:
         generated = len(outputs[0].outputs[0].token_ids)
-    return elapsed, generated
+    prefill_s, decode_s = _extract_vllm_split_timing(outputs, started, started + elapsed)
+    return TimedGenerateResult(
+        total_s=elapsed,
+        prefill_s=prefill_s,
+        decode_s=decode_s,
+        generated_tokens=generated,
+    )
+
+
+def _extract_vllm_split_timing(outputs, started: float, ended: float) -> tuple[float, float]:
+    """Extract TTFT/decode split from vLLM RequestOutput metrics when available."""
+
+    total_s = max(0.0, ended - started)
+    if not outputs:
+        return 0.0, total_s
+    metrics = getattr(outputs[0], "metrics", None)
+    if metrics is None:
+        return 0.0, total_s
+    first_token_time = getattr(metrics, "first_token_time", None)
+    finished_time = getattr(metrics, "finished_time", None)
+    arrival_time = getattr(metrics, "arrival_time", None)
+    if isinstance(first_token_time, (int, float)):
+        if started <= first_token_time <= ended:
+            prefill_s = max(0.0, float(first_token_time) - started)
+            decode_s = max(0.0, ended - float(first_token_time))
+            return prefill_s, decode_s
+        if (
+            isinstance(arrival_time, (int, float))
+            and isinstance(finished_time, (int, float))
+            and arrival_time <= first_token_time <= finished_time
+        ):
+            return (
+                max(0.0, float(first_token_time) - float(arrival_time)),
+                max(0.0, float(finished_time) - float(first_token_time)),
+            )
+    return 0.0, total_s
 
 
 def _print_run_result(
@@ -368,17 +555,18 @@ def _print_run_result(
     name: str,
     phase: str,
     run_index: int,
-    elapsed: float,
+    result: TimedGenerateResult,
     generated_tokens: int,
 ) -> None:
     """Print one generation run result immediately for long benchmark jobs."""
 
-    tokens_per_s = generated_tokens / elapsed if elapsed > 0 else 0.0
     print(
         f"[{name}] {phase}#{run_index} "
-        f"latency_s={elapsed:.4f} "
+        f"total_s={result.total_s:.4f} "
+        f"prefill_s={result.prefill_s:.4f} "
+        f"decode_s={result.decode_s:.4f} "
         f"generated_tokens={generated_tokens} "
-        f"tokens_per_s={tokens_per_s:.4f}",
+        f"decode_tokens_per_s={result.decode_tokens_per_s:.4f}",
         flush=True,
     )
 
@@ -397,46 +585,51 @@ def _benchmark_manager(
     is_flashinfer = name == "flashinfer_paged_kv"
     cold_flashinfer = is_flashinfer and args.flashinfer_cache_policy == "cold"
     hot_flashinfer = is_flashinfer and args.flashinfer_cache_policy == "hot"
+    runner = _run_hf_generate_once if name == "hf_generate" else _run_generate_once
 
     print(f"\n[{name}] prompt_tokens={len(prompt_ids)} prompt_chars={len(prompt)}", flush=True)
     for run_index in range(1, max(0, args.warmup_runs) + 1):
         if cold_flashinfer:
             _invalidate_adapter_cache(manager, "general")
-        elapsed, token_count = _run_generate_once(manager, prompt_ids, args)
+        result = runner(manager, prompt_ids, args)
         _print_run_result(
             name=name,
             phase="warmup",
             run_index=run_index,
-            elapsed=elapsed,
-            generated_tokens=token_count,
+            result=result,
+            generated_tokens=result.generated_tokens,
         )
 
     if hot_flashinfer and args.warmup_runs <= 0:
-        elapsed, token_count = _run_generate_once(manager, prompt_ids, args)
+        result = _run_generate_once(manager, prompt_ids, args)
         _print_run_result(
             name=name,
             phase="cache_prime",
             run_index=1,
-            elapsed=elapsed,
-            generated_tokens=token_count,
+            result=result,
+            generated_tokens=result.generated_tokens,
         )
 
     latencies: list[float] = []
+    prefill_latencies: list[float] = []
+    decode_latencies: list[float] = []
     generated_tokens: list[int] = []
     tokens_per_s: list[float] = []
     for run_index in range(1, max(1, args.measure_runs) + 1):
         if cold_flashinfer:
             _invalidate_adapter_cache(manager, "general")
-        elapsed, token_count = _run_generate_once(manager, prompt_ids, args)
-        latencies.append(elapsed)
-        generated_tokens.append(token_count)
-        tokens_per_s.append(token_count / elapsed if elapsed > 0 else 0.0)
+        result = runner(manager, prompt_ids, args)
+        latencies.append(result.total_s)
+        prefill_latencies.append(result.prefill_s)
+        decode_latencies.append(result.decode_s)
+        generated_tokens.append(result.generated_tokens)
+        tokens_per_s.append(result.decode_tokens_per_s)
         _print_run_result(
             name=name,
             phase="measure",
             run_index=run_index,
-            elapsed=elapsed,
-            generated_tokens=token_count,
+            result=result,
+            generated_tokens=result.generated_tokens,
         )
 
     return GenerateBenchStats(
@@ -444,6 +637,8 @@ def _benchmark_manager(
         load_time_s=load_time_s,
         prompt_tokens=len(prompt_ids),
         latencies_s=latencies,
+        prefill_latencies_s=prefill_latencies,
+        decode_latencies_s=decode_latencies,
         generated_tokens=generated_tokens,
         tokens_per_s=tokens_per_s,
     )
@@ -465,29 +660,33 @@ def _benchmark_vllm(
 
     print(f"\n[{name}] prompt_tokens={len(prompt_ids)} prompt_chars={len(prompt)}", flush=True)
     for run_index in range(1, max(0, args.warmup_runs) + 1):
-        elapsed, token_count = _run_vllm_once(llm, prompt_ids, args, device, lora_request=lora_request)
+        result = _run_vllm_once(llm, prompt_ids, args, device, lora_request=lora_request)
         _print_run_result(
             name=name,
             phase="warmup",
             run_index=run_index,
-            elapsed=elapsed,
-            generated_tokens=token_count,
+            result=result,
+            generated_tokens=result.generated_tokens,
         )
 
     latencies: list[float] = []
+    prefill_latencies: list[float] = []
+    decode_latencies: list[float] = []
     generated_tokens: list[int] = []
     tokens_per_s: list[float] = []
     for run_index in range(1, max(1, args.measure_runs) + 1):
-        elapsed, token_count = _run_vllm_once(llm, prompt_ids, args, device, lora_request=lora_request)
-        latencies.append(elapsed)
-        generated_tokens.append(token_count)
-        tokens_per_s.append(token_count / elapsed if elapsed > 0 else 0.0)
+        result = _run_vllm_once(llm, prompt_ids, args, device, lora_request=lora_request)
+        latencies.append(result.total_s)
+        prefill_latencies.append(result.prefill_s)
+        decode_latencies.append(result.decode_s)
+        generated_tokens.append(result.generated_tokens)
+        tokens_per_s.append(result.decode_tokens_per_s)
         _print_run_result(
             name=name,
             phase="measure",
             run_index=run_index,
-            elapsed=elapsed,
-            generated_tokens=token_count,
+            result=result,
+            generated_tokens=result.generated_tokens,
         )
 
     return GenerateBenchStats(
@@ -495,6 +694,8 @@ def _benchmark_vllm(
         load_time_s=load_time_s,
         prompt_tokens=len(prompt_ids),
         latencies_s=latencies,
+        prefill_latencies_s=prefill_latencies,
+        decode_latencies_s=decode_latencies,
         generated_tokens=generated_tokens,
         tokens_per_s=tokens_per_s,
     )
@@ -506,11 +707,17 @@ def _print_path_stats(stats: GenerateBenchStats) -> None:
     print(f"\n[{stats.name}]")
     print(f"load_time_s={stats.load_time_s:.4f}")
     print(f"prompt_tokens={stats.prompt_tokens}")
-    print(f"mean_latency_s={stats.mean_latency_s:.4f}")
-    print(f"p50_latency_s={_percentile(stats.latencies_s, 0.50):.4f}")
-    print(f"p95_latency_s={_percentile(stats.latencies_s, 0.95):.4f}")
+    print(f"mean_total_s={stats.mean_latency_s:.4f}")
+    print(f"p50_total_s={_percentile(stats.latencies_s, 0.50):.4f}")
+    print(f"p95_total_s={_percentile(stats.latencies_s, 0.95):.4f}")
+    print(f"mean_prefill_s={stats.mean_prefill_s:.4f}")
+    print(f"p50_prefill_s={_percentile(stats.prefill_latencies_s, 0.50):.4f}")
+    print(f"p95_prefill_s={_percentile(stats.prefill_latencies_s, 0.95):.4f}")
+    print(f"mean_decode_s={stats.mean_decode_s:.4f}")
+    print(f"p50_decode_s={_percentile(stats.decode_latencies_s, 0.50):.4f}")
+    print(f"p95_decode_s={_percentile(stats.decode_latencies_s, 0.95):.4f}")
     print(f"mean_generated_tokens={stats.mean_generated_tokens:.2f}")
-    print(f"mean_tokens_per_s={stats.mean_tokens_per_s:.4f}")
+    print(f"mean_decode_tokens_per_s={stats.mean_tokens_per_s:.4f}")
 
 
 def _print_pair_comparison(label: str, numerator: GenerateBenchStats, denominator: GenerateBenchStats) -> None:
@@ -593,6 +800,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank.")
     parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha.")
     parser.add_argument("--lora-dropout", type=float, default=0.0, help="LoRA dropout.")
+    parser.add_argument(
+        "--adapter-role",
+        choices=("serve", "base"),
+        default="serve",
+        help="Project runtime adapter role. base skips project LoRA deltas for HF/FlashInfer paths.",
+    )
     parser.add_argument("--flashinfer-page-size", type=int, default=32, help="FlashInfer KV page size.")
     parser.add_argument("--flashinfer-max-pages", type=int, default=0, help="0 means grow dense page cache on demand.")
     parser.add_argument("--flashinfer-workspace-mb", type=int, default=128, help="FlashInfer workspace size in MiB.")
@@ -669,6 +882,7 @@ def run_benchmark(
     print(f"sampling_mode={args.sampling_mode}")
     print(f"compute_logprobs={args.compute_logprobs}")
     print(f"benchmark_path={args.benchmark_path}")
+    print(f"adapter_role={args.adapter_role}")
     print(f"flashinfer_cache_policy={args.flashinfer_cache_policy}")
     print(f"flashinfer_kv_append_mode={args.flashinfer_kv_append_mode}")
     print(f"flashinfer_qk_norm={args.flashinfer_qk_norm}")

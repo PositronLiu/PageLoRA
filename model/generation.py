@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 import torch
@@ -13,7 +13,7 @@ from core.constants import (
     DEFAULT_TOP_P,
 )
 from core.utils import LOG
-from multilora.runtime import AdapterRole
+from multilora.runtime import AdapterRole, normalize_adapter_role
 from model.model_manager import ModelManager
 
 
@@ -24,6 +24,7 @@ class GenerationOutput:
     response_text: str
     response_ids: list[int]
     logprobs: list[float]
+    timings: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -194,9 +195,11 @@ def generate_with_logprobs(
     ignore_eos: bool = False,
     sampling_mode: Literal["project_default", "greedy_fast", "flashinfer_topk_topp"] = "project_default",
     compute_logprobs: bool = True,
+    adapter_role: str = AdapterRole.SERVE.value,
 ) -> GenerationOutput:
     """Generate a response and compute token log-probabilities."""
 
+    resolved_role = normalize_adapter_role(adapter_role)
     cache_mode = getattr(manager.config, "kvcache_mode", "hf")
     if cache_mode == "hf" and getattr(manager.config, "kvcache_decompose", False):
         cache_mode = "br"
@@ -205,7 +208,8 @@ def generate_with_logprobs(
         from model.brcache.generation import generate_with_br_kvcache
 
         resolved = adapter_name or manager.active_logical_adapter_name
-        with manager.use_adapter(adapter_name=resolved, role=AdapterRole.SERVE.value):
+        context_adapter = None if resolved_role == AdapterRole.BASE.value else resolved
+        with manager.use_adapter(adapter_name=context_adapter, role=resolved_role):
             with manager.inference_session(enable_cache=False):  # cache managed externally
                 with torch.no_grad():
                     return generate_with_br_kvcache(
@@ -227,7 +231,8 @@ def generate_with_logprobs(
         from model.fullcache.generation import generate_with_full_kvcache
 
         resolved = adapter_name or manager.active_logical_adapter_name
-        with manager.use_adapter(adapter_name=resolved, role=AdapterRole.SERVE.value):
+        context_adapter = None if resolved_role == AdapterRole.BASE.value else resolved
+        with manager.use_adapter(adapter_name=context_adapter, role=resolved_role):
             with manager.inference_session(enable_cache=False):  # cache managed externally
                 with torch.no_grad():
                     return generate_with_full_kvcache(
@@ -249,7 +254,8 @@ def generate_with_logprobs(
         from model.flashinfer.generation import generate_with_flashinfer_kvcache
 
         resolved = adapter_name or manager.active_logical_adapter_name
-        with manager.use_adapter(adapter_name=resolved, role=AdapterRole.SERVE.value):
+        context_adapter = None if resolved_role == AdapterRole.BASE.value else resolved
+        with manager.use_adapter(adapter_name=context_adapter, role=resolved_role):
             with manager.inference_session(enable_cache=False):  # cache managed externally
                 with torch.no_grad():
                     return generate_with_flashinfer_kvcache(
@@ -301,7 +307,8 @@ def generate_with_logprobs(
     if manager.config.cpu_offload:
         model.to(manager.device)
 
-    with manager.use_adapter(adapter_name=adapter_name, role=AdapterRole.SERVE.value):
+    context_adapter = None if resolved_role == AdapterRole.BASE.value else adapter_name
+    with manager.use_adapter(adapter_name=context_adapter, role=resolved_role):
         with manager.inference_session(enable_cache=True):
             with torch.no_grad():
                 outputs = model.generate(**generation_kwargs)
