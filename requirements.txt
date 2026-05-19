@@ -1,0 +1,24 @@
+# Python >= 3.10
+#
+# Tested in the current workspace with CUDA 12.x:
+#   torch 2.10.0
+#   transformers 4.57.6
+#   flashinfer-python 0.6.6
+#   vllm 0.19.0
+#
+# FlashInfer paged-KV requires a CUDA-capable environment. Some FlashInfer JIT
+# paths also require a system CUDA Toolkit with nvcc, not only the PyTorch CUDA
+# runtime.
+
+torch==2.10.0
+numpy==2.2.5
+transformers==4.57.6
+safetensors==0.7.0
+peft==0.18.1
+
+# FlashInfer backend and direct vLLM benchmark backend.
+flashinfer-python==0.6.6
+vllm==0.19.0
+
+# Test suite.
+pytest==9.0.3
