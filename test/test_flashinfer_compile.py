@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from model.flashinfer import compiled_mlp, compiled_post, packed_ops
+from model.flashinfer import compile_config
 from model.flashinfer.compile_config import clear_flashinfer_compile_cache
 from model.flashinfer.norm import apply_rmsnorm
 
@@ -145,3 +146,39 @@ def test_clear_compile_cache_walks_plans_and_layers():
     assert not hasattr(plan, "_flashinfer_compiled_post")
     assert not hasattr(layer, "_flashinfer_compiled_mlp")
     assert not hasattr(layer[0], "_flashinfer_compile_mlp_disabled")
+
+
+def test_compile_module_disables_cudagraphs_by_default(monkeypatch):
+    captured = {}
+
+    def fake_torch_compile(module, **kwargs):
+        captured.update(kwargs)
+        return module
+
+    monkeypatch.delenv("MINI_OPENCLAW_FLASHINFER_COMPILE_CUDAGRAPHS", raising=False)
+    monkeypatch.setattr(compile_config.torch, "compile", fake_torch_compile)
+    module = nn.Linear(2, 2)
+
+    output = compile_config.compile_module(module)
+
+    assert output is module
+    assert captured["options"] == {"triton.cudagraphs": False}
+    assert "mode" not in captured
+
+
+def test_compile_module_can_enable_cudagraphs(monkeypatch):
+    captured = {}
+
+    def fake_torch_compile(module, **kwargs):
+        captured.update(kwargs)
+        return module
+
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_COMPILE_CUDAGRAPHS", "1")
+    monkeypatch.setattr(compile_config.torch, "compile", fake_torch_compile)
+    module = nn.Linear(2, 2)
+
+    output = compile_config.compile_module(module)
+
+    assert output is module
+    assert "options" not in captured
+    assert captured["mode"] == "reduce-overhead"

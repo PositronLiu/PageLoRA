@@ -34,6 +34,10 @@ def torch_compile_fullgraph() -> bool:
     return _env_enabled("MINI_OPENCLAW_FLASHINFER_COMPILE_FULLGRAPH", default=False)
 
 
+def torch_compile_cudagraphs() -> bool:
+    return _env_enabled("MINI_OPENCLAW_FLASHINFER_COMPILE_CUDAGRAPHS", default=False)
+
+
 def can_compile_decode_tensor(hidden: torch.Tensor) -> bool:
     return hidden.device.type == "cuda" and hidden.ndim == 3 and hidden.size(0) == 1 and hidden.size(1) == 1
 
@@ -41,11 +45,12 @@ def can_compile_decode_tensor(hidden: torch.Tensor) -> bool:
 def compile_module(module: torch.nn.Module) -> torch.nn.Module:
     if not hasattr(torch, "compile"):
         raise RuntimeError("torch.compile is unavailable")
-    return torch.compile(
-        module,
-        mode=torch_compile_mode(),
-        fullgraph=torch_compile_fullgraph(),
-    )
+    kwargs: dict[str, object] = {"fullgraph": torch_compile_fullgraph()}
+    if torch_compile_cudagraphs():
+        kwargs["mode"] = torch_compile_mode()
+    else:
+        kwargs["options"] = {"triton.cudagraphs": False}
+    return torch.compile(module, **kwargs)
 
 
 def clear_flashinfer_compile_cache(*roots: object) -> None:
