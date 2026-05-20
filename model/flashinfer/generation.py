@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,16 @@ from model.kvcache.paged_kvcache_request import FlashInferPagedKVRequest
 if TYPE_CHECKING:
     from model.generation import GenerationOutput
     from model.model_manager import ModelManager
+
+
+def _prefill_chunk_tokens() -> int:
+    raw = os.getenv("MINI_OPENCLAW_FLASHINFER_PREFILL_CHUNK_TOKENS", "0").strip()
+    if not raw:
+        return 0
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
 
 
 def _run_flashinfer_prefill_segment(
@@ -88,6 +99,45 @@ def _run_flashinfer_prefill_segment(
     if perf is not None:
         perf.add("prefill_layers_s", layers_t0)
         perf.add("prefill_total_s", total_t0)
+    return hidden
+
+
+def _run_flashinfer_prefill(
+    manager: "ModelManager",
+    token_ids: list[int],
+    *,
+    start_pos: int,
+    request_cache: FlashInferPagedKVRequest,
+    backend: FlashInferAttentionBackend,
+    perf: FlashInferPerfTrace | None = None,
+) -> torch.Tensor:
+    """Run prompt prefill, optionally splitting long prompt misses into chunks."""
+
+    chunk_tokens = _prefill_chunk_tokens()
+    if chunk_tokens <= 0 or len(token_ids) <= chunk_tokens:
+        return _run_flashinfer_prefill_segment(
+            manager,
+            token_ids,
+            start_pos=start_pos,
+            request_cache=request_cache,
+            backend=backend,
+            perf=perf,
+        )
+
+    LOG(f"FlashInfer paged prefill chunking: chunk_tokens={chunk_tokens}")
+    hidden: torch.Tensor | None = None
+    for offset in range(0, len(token_ids), chunk_tokens):
+        segment = token_ids[offset : offset + chunk_tokens]
+        hidden = _run_flashinfer_prefill_segment(
+            manager,
+            segment,
+            start_pos=start_pos + offset,
+            request_cache=request_cache,
+            backend=backend,
+            perf=perf,
+        )
+    if hidden is None:
+        raise ValueError("prefill tokens must not be empty")
     return hidden
 
 
@@ -240,7 +290,7 @@ def generate_with_flashinfer_kvcache(
 
     try:
         LOG(f"FlashInfer paged prefill: {len(new_ids)} tokens (cache_start={prefill_from})")
-        hidden = _run_flashinfer_prefill_segment(
+        hidden = _run_flashinfer_prefill(
             manager,
             new_ids,
             start_pos=prefill_from,
