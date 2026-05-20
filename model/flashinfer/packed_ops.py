@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import flashinfer
 import torch
@@ -47,6 +47,53 @@ def packed_lora_delta_enabled() -> bool:
 
 def fused_activation_enabled() -> bool:
     return _env_enabled("MINI_OPENCLAW_FLASHINFER_FUSED_ACT", default=True)
+
+
+def shared_packed_base_weight_storage_enabled() -> bool:
+    """Return whether packed base weights should replace original storages."""
+
+    storage = os.getenv("MINI_OPENCLAW_FLASHINFER_PACKED_WEIGHT_STORAGE")
+    if storage is not None:
+        return storage.lower() in {"shared", "share", "alias", "shared_storage"}
+    return _flashinfer_memory_mode() in {"balanced", "low_vram"}
+
+
+def prepare_shared_packed_base_weights(
+    layers: Sequence[torch.nn.Module],
+    layer_plans: Sequence[object],
+) -> dict[str, int]:
+    """Materialize packed base weights early when shared storage mode is enabled."""
+
+    stats = {"qkv": 0, "gate_up": 0}
+    if not shared_packed_base_weight_storage_enabled():
+        return stats
+
+    for layer, plan in zip(layers, layer_plans):
+        attn = getattr(layer, "self_attn", None)
+        if attn is not None and packed_qkv_enabled():
+            modules = (
+                getattr(plan, "modules", {}).get("self_attn.q_proj") or getattr(attn, "q_proj", None),
+                getattr(plan, "modules", {}).get("self_attn.k_proj") or getattr(attn, "k_proj", None),
+                getattr(plan, "modules", {}).get("self_attn.v_proj") or getattr(attn, "v_proj", None),
+            )
+            if all(module is not None for module in modules):
+                packed = _cached_packed_linear(
+                    owner=plan,
+                    attr="_flashinfer_packed_qkv",
+                    modules=modules,  # type: ignore[arg-type]
+                )
+                if packed is not None:
+                    stats["qkv"] += 1
+
+        mlp = getattr(layer, "mlp", None)
+        if mlp is not None and packed_mlp_enabled():
+            packed = get_base_gate_up_packed_linear(mlp)
+            if packed is not None and isinstance(packed, PackedLinear):
+                stats["gate_up"] += 1
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    return stats
 
 
 def project_qkv_packed(
@@ -219,9 +266,11 @@ def _cached_packed_linear(
     if isinstance(cached, PackedLinear) and cached.cache_key == cache_key:
         return cached
 
+    share_storage = shared_packed_base_weight_storage_enabled() and _can_share_packed_linear_storage(modules)
     weights = [_linear_weight(module) for module in modules]
     biases = [_linear_bias(module) for module in modules]
     weight = torch.cat(weights, dim=0).contiguous()
+    out_features = tuple(weight_tensor.size(0) for weight_tensor in weights)
     bias: torch.Tensor | None
     if any(bias_tensor is not None for bias_tensor in biases):
         bias_pieces = [
@@ -237,10 +286,13 @@ def _cached_packed_linear(
         bias = torch.cat(bias_pieces, dim=0).contiguous()
     else:
         bias = None
+    if share_storage:
+        _share_packed_linear_storage(modules, weight, bias, out_features)
+        cache_key = _packed_cache_key(modules)
     packed = PackedLinear(
         weight=weight,
         bias=bias,
-        out_features=tuple(weight_tensor.size(0) for weight_tensor in weights),
+        out_features=out_features,
         cache_key=cache_key,
     )
     setattr(owner, attr, packed)
@@ -366,6 +418,48 @@ def _packed_cache_key(modules: Iterable[torch.nn.Module]) -> tuple[object, ...]:
     return tuple(pieces)
 
 
+def _can_share_packed_linear_storage(modules: Iterable[torch.nn.Module]) -> bool:
+    for module in modules:
+        weight = getattr(module, "weight", None)
+        if not isinstance(weight, torch.nn.Parameter) or weight.ndim != 2:
+            return False
+        if weight.requires_grad:
+            return False
+        bias = getattr(module, "bias", None)
+        if bias is not None:
+            if not isinstance(bias, torch.nn.Parameter) or bias.ndim != 1:
+                return False
+            if bias.requires_grad:
+                return False
+    return True
+
+
+def _share_packed_linear_storage(
+    modules: tuple[torch.nn.Module, ...],
+    weight: torch.Tensor,
+    bias: torch.Tensor | None,
+    out_features: tuple[int, ...],
+) -> None:
+    weight_offset = 0
+    for module, output_dim in zip(modules, out_features):
+        old_weight = _linear_weight(module)
+        shared_weight = weight[weight_offset : weight_offset + output_dim].view_as(old_weight)
+        setattr(module, "weight", torch.nn.Parameter(shared_weight, requires_grad=False))
+        weight_offset += output_dim
+
+    biases = [_linear_bias(module) for module in modules]
+    if bias is None or not all(bias_tensor is not None for bias_tensor in biases):
+        return
+    bias_offset = 0
+    for module, output_dim in zip(modules, out_features):
+        old_bias = _linear_bias(module)
+        if old_bias is None:
+            return
+        shared_bias = bias[bias_offset : bias_offset + output_dim].view_as(old_bias)
+        setattr(module, "bias", torch.nn.Parameter(shared_bias, requires_grad=False))
+        bias_offset += output_dim
+
+
 def _lora_pack_info(
     module: torch.nn.Module | None,
 ) -> tuple[torch.Tensor, torch.Tensor, float, tuple[object, ...]] | None:
@@ -464,3 +558,7 @@ def _env_enabled(name: str, *, default: bool) -> bool:
     if value is None:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _flashinfer_memory_mode() -> str:
+    return os.getenv("MINI_OPENCLAW_FLASHINFER_MEMORY_MODE", "throughput").lower()

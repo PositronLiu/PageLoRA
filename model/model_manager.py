@@ -181,6 +181,21 @@ class ModelManager:
                 )
             self.lora_runtime.set_kvcache_manager(self._kvcache_manager)
             LOG(f"{type(self._kvcache_manager).__name__} initialized layers={num_layers}")
+            if cache_mode == "flashinfer":
+                from model.flashinfer.packed_ops import (
+                    prepare_shared_packed_base_weights,
+                    shared_packed_base_weight_storage_enabled,
+                )
+
+                if shared_packed_base_weight_storage_enabled():
+                    stats = prepare_shared_packed_base_weights(
+                        self.lora_runtime.layers,
+                        self.lora_runtime.layer_plans,
+                    )
+                    LOG(
+                        "FlashInfer shared packed base weights ready "
+                        f"qkv={stats['qkv']} gate_up={stats['gate_up']}"
+                    )
 
     def _enable_gradient_checkpointing_inputs(self) -> None:
         """Ensure checkpointed forwards still see grad-requiring inputs.

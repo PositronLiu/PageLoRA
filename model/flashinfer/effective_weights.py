@@ -30,7 +30,18 @@ class EffectivePackedLinear:
 
 
 def effective_weights_enabled() -> bool:
-    return _env_enabled("MINI_OPENCLAW_FLASHINFER_EFFECTIVE_WEIGHTS", default=True)
+    memory_mode = os.getenv("MINI_OPENCLAW_FLASHINFER_MEMORY_MODE", "throughput").lower()
+    storage = os.getenv("MINI_OPENCLAW_FLASHINFER_PACKED_WEIGHT_STORAGE", "").lower()
+    low_vram_default = memory_mode in {"balanced", "low_vram"} or storage in {
+        "shared",
+        "share",
+        "alias",
+        "shared_storage",
+    }
+    return _env_enabled(
+        "MINI_OPENCLAW_FLASHINFER_EFFECTIVE_WEIGHTS",
+        default=not low_vram_default,
+    )
 
 
 def effective_linear(module: torch.nn.Module) -> EffectiveLinear | None:

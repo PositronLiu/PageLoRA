@@ -282,8 +282,9 @@ def _make_vllm_llm(args: argparse.Namespace):
         "enable_prefix_caching": args.vllm_enable_prefix_caching,
         "seed": args.seed,
     }
-    if args.vllm_max_model_len > 0:
-        kwargs["max_model_len"] = args.vllm_max_model_len
+    vllm_max_model_len = getattr(args, "vllm_max_model_len", 0)
+    if vllm_max_model_len > 0:
+        kwargs["max_model_len"] = vllm_max_model_len
     if args.vllm_enable_lora or args.vllm_lora_path:
         kwargs["enable_lora"] = True
         kwargs["max_lora_rank"] = args.vllm_max_lora_rank or args.lora_r

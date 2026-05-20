@@ -174,11 +174,13 @@ def _run_mlp(
 
     act_t0 = perf.tic() if perf is not None else time.perf_counter()
     activated = apply_gate_up_activation(gate_up, mlp.act_fn)
+    del gate_up
     if perf is not None:
         perf.add_layer(mode, layer_idx, "mlp_act_s", act_t0)
 
     down_t0 = perf.tic() if perf is not None else time.perf_counter()
     output = project_down(mlp, activated)
+    del activated
     if perf is not None:
         perf.add_layer(mode, layer_idx, "mlp_down_s", down_t0)
     return output

@@ -7,7 +7,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from model.flashinfer import packed_ops
-from model.flashinfer.effective_weights import clear_flashinfer_effective_weight_cache, effective_linear
+from model.flashinfer.effective_weights import (
+    clear_flashinfer_effective_weight_cache,
+    effective_linear,
+    effective_weights_enabled,
+)
 from model.flashinfer.projection import project_qkv_with_optional_norm
 from multilora.linear import LoRALinear
 
@@ -220,6 +224,35 @@ def test_packed_gate_up_mlp_matches_reference(monkeypatch):
 
     _assert_close(output, mlp(hidden))
     assert getattr(mlp, "_flashinfer_packed_gate_up").weight.shape == (10, 6)
+
+
+def test_balanced_memory_mode_disables_effective_weights_by_default(monkeypatch):
+    monkeypatch.delenv("MINI_OPENCLAW_FLASHINFER_EFFECTIVE_WEIGHTS", raising=False)
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_MEMORY_MODE", "balanced")
+
+    assert not effective_weights_enabled()
+
+
+def test_shared_packed_gate_up_storage_matches_reference(monkeypatch):
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_PACKED_MLP", "1")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_FUSED_ACT", "0")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_PACKED_WEIGHT_STORAGE", "shared")
+    mlp = _TinyMLP()
+    for param in mlp.parameters():
+        param.requires_grad = False
+    hidden = torch.randn(2, 3, 6)
+
+    gate_up = packed_ops.project_gate_up_packed(mlp, hidden)
+    activated = packed_ops.apply_gate_up_activation(gate_up, mlp.act_fn)
+    output = packed_ops.project_down(mlp, activated)
+
+    _assert_close(output, mlp(hidden))
+    packed = getattr(mlp, "_flashinfer_packed_gate_up")
+    packed_storage = packed.weight.untyped_storage().data_ptr()
+    assert mlp.gate_proj.weight.untyped_storage().data_ptr() == packed_storage
+    assert mlp.up_proj.weight.untyped_storage().data_ptr() == packed_storage
+    assert packed_ops.project_gate_up_packed(mlp, hidden) is not None
+    assert getattr(mlp, "_flashinfer_packed_gate_up") is packed
 
 
 class _TinyLoRAMLP(nn.Module):
