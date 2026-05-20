@@ -282,6 +282,8 @@ def _make_vllm_llm(args: argparse.Namespace):
         "enable_prefix_caching": args.vllm_enable_prefix_caching,
         "seed": args.seed,
     }
+    if args.vllm_max_model_len > 0:
+        kwargs["max_model_len"] = args.vllm_max_model_len
     if args.vllm_enable_lora or args.vllm_lora_path:
         kwargs["enable_lora"] = True
         kwargs["max_lora_rank"] = args.vllm_max_lora_rank or args.lora_r
@@ -915,6 +917,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.9,
         help="vLLM gpu_memory_utilization argument.",
     )
+    parser.add_argument(
+        "--vllm-max-model-len",
+        type=int,
+        default=0,
+        help="vLLM max_model_len argument. 0 leaves vLLM default from model config.",
+    )
     parser.add_argument("--vllm-enforce-eager", action="store_true", help="Run vLLM with enforce_eager=True.")
     parser.add_argument(
         "--vllm-trust-remote-code",
@@ -969,6 +977,7 @@ def run_benchmark(
     print(f"flashinfer_kv_append_mode={args.flashinfer_kv_append_mode}")
     print(f"flashinfer_qk_norm={args.flashinfer_qk_norm}")
     print(f"vllm_enable_prefix_caching={args.vllm_enable_prefix_caching}")
+    print(f"vllm_max_model_len={args.vllm_max_model_len or 'default'}")
     print(f"vllm_enforce_eager={args.vllm_enforce_eager}")
     print(f"vllm_enable_lora={args.vllm_enable_lora or bool(args.vllm_lora_path)}")
     print(f"vllm_lora_path={args.vllm_lora_path}")
