@@ -43,6 +43,7 @@ class FlashInferPagedKVCacheManager:
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
         model_config: object | None = None,
+        memory_coordinator: object | None = None,
     ) -> None:
         """Create a paged cache manager compatible with full-KV APIs."""
 
@@ -54,6 +55,7 @@ class FlashInferPagedKVCacheManager:
         self._device = device
         self._dtype = dtype
         self._model_config = model_config
+        self._memory_coordinator = memory_coordinator
         self._prefix_cache = RadixPrefixCache()
         self._block_store = PagedKVBlockStore(
             page_size=page_size,
@@ -323,6 +325,10 @@ class FlashInferPagedKVCacheManager:
         self._perf_add("manager_commit_final_len", float(final_len))
         self._perf_add("manager_commit_start", float(start))
         self._perf_add("manager_commit_spans", float(len(commit_spans)))
+
+        if self._memory_coordinator is not None:
+            self._memory_coordinator.notify_kvcache_access(request.adapter_name)
+            self._memory_coordinator.maybe_offload()
 
     def abort_request(self, request: FlashInferPagedKVRequest) -> None:
         """Close an active request without committing request-local chunks."""

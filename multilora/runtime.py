@@ -55,6 +55,7 @@ class LoRARuntime:
         default_logical_adapter: str = "general",
         adapter_offload: bool = False,
         adapter_offload_lru_size: int = 1,
+        memory_coordinator: object | None = None,
     ) -> None:
         self.model = model
         self.target_modules = target_modules
@@ -72,6 +73,7 @@ class LoRARuntime:
         self._device: torch.device | None = None
         self._gpu_resident_adapters: list[str] = []
         self._kvcache_manager: object | None = None
+        self._memory_coordinator: object | None = memory_coordinator
 
         targets = discover_lora_patch_targets(model)
         self.layers: list[nn.Module] = targets["layers"]
@@ -145,6 +147,10 @@ class LoRARuntime:
                     f"Registered adapters: {list(self._serve_registry.keys())}"
                 )
 
+            if self._memory_coordinator is not None:
+                self._memory_coordinator.set_active_adapter(adapter_name)
+                self._memory_coordinator.notify_adapter_access(adapter_name)
+
             if self._adapter_offload and self._device is not None:
                 self.ensure_adapter_on_gpu(adapter_name, self._device)
 
@@ -168,6 +174,10 @@ class LoRARuntime:
 
         if adapter_name not in self._serve_registry:
             return
+
+        if self._memory_coordinator is not None:
+            self._memory_coordinator.maybe_offload()
+
         moved = False
         with torch.no_grad():
             for weights in self._serve_registry[adapter_name].values():
@@ -220,6 +230,9 @@ class LoRARuntime:
         """Evict LRU adapters beyond the active + LRU budget."""
 
         if not self._adapter_offload or self._device is None:
+            return
+        if self._memory_coordinator is not None:
+            self._memory_coordinator.maybe_offload()
             return
         max_resident = 1 + self._adapter_offload_lru_size
         inactive = [a for a in self._gpu_resident_adapters

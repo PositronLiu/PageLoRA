@@ -163,7 +163,7 @@ class RadixPrefixCache:
             raise ValueError("span length exceeds token path")
 
         match = self.lookup(token_ids, keys=(key,))
-        if match.key_match_len.get(key, 0) != start:
+        if match.key_match_len.get(key, 0) < start:
             raise ValueError("non-contiguous cache insert for radix path")
 
         self.ensure_token_path(token_ids)

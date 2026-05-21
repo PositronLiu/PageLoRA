@@ -8,6 +8,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from core.utils import LOG, get_device, get_torch_dtype
+from model.memory_aware import MemoryAwareCoordinator
 from multilora.runtime import AdapterRole, LoRARuntime, normalize_adapter_role
 
 
@@ -88,6 +89,9 @@ class ModelManager:
                 else:
                     config.kvcache_mode = "full"
                 config.kvcache_decompose = config.kvcache_mode == "br"
+            elif config.kvcache_decompose:
+                config.kvcache_mode = "br"
+                config.enable_br_cache = True
             else:
                 config.kvcache_mode = _select_single_adapter_cache_mode(config)
                 config.enable_br_cache = False
@@ -129,6 +133,14 @@ class ModelManager:
         self.model.config.use_cache = False
         self.model.gradient_checkpointing_enable()
 
+        self._memory_coordinator: MemoryAwareCoordinator | None = None
+        if config.adapter_offload:
+            self._memory_coordinator = MemoryAwareCoordinator(
+                target_fraction=0.85,
+                device=self.device,
+            )
+            LOG("MemoryAwareCoordinator initialized for adapter+KV cache offload")
+
         self.lora_runtime = LoRARuntime(
             self.model,
             target_modules=config.target_modules,
@@ -139,6 +151,7 @@ class ModelManager:
             default_logical_adapter=config.default_logical_adapter,
             adapter_offload=config.adapter_offload,
             adapter_offload_lru_size=config.adapter_offload_lru_size,
+            memory_coordinator=self._memory_coordinator,
         )
         self.lora_runtime.set_active(self.default_logical_adapter, AdapterRole.SERVE.value)
         self._enable_gradient_checkpointing_inputs()
@@ -149,6 +162,10 @@ class ModelManager:
             f"lora_tensors_gpu={lora_moved}"
             f"{' (adapter offload)' if config.adapter_offload else ''}"
         )
+
+        if self._memory_coordinator is not None:
+            self._memory_coordinator.register_lora_runtime(self.lora_runtime)
+            self._memory_coordinator.set_active_adapter(config.default_logical_adapter)
 
         # Managed radix KV cache manager (lazy-init if enabled).
         self._kvcache_manager = None
@@ -161,11 +178,17 @@ class ModelManager:
             if cache_mode == "br":
                 from model.brcache.manager import BRKVCacheManager
 
-                self._kvcache_manager = BRKVCacheManager(num_layers=num_layers)
+                self._kvcache_manager = BRKVCacheManager(
+                    num_layers=num_layers,
+                    memory_coordinator=self._memory_coordinator,
+                )
             elif cache_mode == "full":
                 from model.fullcache.manager import FullKVCacheManager
 
-                self._kvcache_manager = FullKVCacheManager(num_layers=num_layers)
+                self._kvcache_manager = FullKVCacheManager(
+                    num_layers=num_layers,
+                    memory_coordinator=self._memory_coordinator,
+                )
             else:
                 from model.kvcache.paged_kvcache_manager import FlashInferPagedKVCacheManager
 
@@ -178,9 +201,12 @@ class ModelManager:
                     device=self.device,
                     dtype=dtype,
                     model_config=self.model.config,
+                    memory_coordinator=self._memory_coordinator,
                 )
             self.lora_runtime.set_kvcache_manager(self._kvcache_manager)
             LOG(f"{type(self._kvcache_manager).__name__} initialized layers={num_layers}")
+            if self._memory_coordinator is not None:
+                self._memory_coordinator.register_kvcache_manager(self._kvcache_manager)
             if cache_mode == "flashinfer":
                 from model.flashinfer.packed_ops import (
                     prepare_shared_packed_base_weights,
