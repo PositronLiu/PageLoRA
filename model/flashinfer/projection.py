@@ -255,7 +255,7 @@ def _apply_optional_head_norm(
         flat = states.reshape(-1, states.size(-1)).contiguous()
         out = flashinfer.norm.rmsnorm(flat, norm.weight, eps=_norm_eps(norm))
         return out.view_as(states)
-    if not use_flashinfer_norm:
+    if use_flashinfer_norm:
         WARNING("unable to use flashinfer rmsnorm")
     return norm(states)
 
