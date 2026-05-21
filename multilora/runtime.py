@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
@@ -72,6 +73,7 @@ class LoRARuntime:
         self._device: torch.device | None = None
         self._gpu_resident_adapters: list[str] = []
         self._kvcache_manager: object | None = None
+        self._merged_lora_adapter_name: str | None = None
 
         targets = discover_lora_patch_targets(model)
         self.layers: list[nn.Module] = targets["layers"]
@@ -156,6 +158,7 @@ class LoRARuntime:
 
             if self._adapter_offload:
                 self._maybe_offload_inactive()
+            self._merge_active_serve_lora_if_enabled()
             return
 
         for _, _, module in self._manual_modules:
@@ -168,6 +171,8 @@ class LoRARuntime:
 
         if adapter_name not in self._serve_registry:
             return
+        if self._merged_lora_adapter_name == adapter_name:
+            self._unmerge_active_serve_lora()
         moved = False
         with torch.no_grad():
             for weights in self._serve_registry[adapter_name].values():
@@ -195,6 +200,8 @@ class LoRARuntime:
 
         if adapter_name not in self._serve_registry:
             return
+        if self._merged_lora_adapter_name == adapter_name:
+            self._unmerge_active_serve_lora()
         moved = False
         with torch.no_grad():
             for weights in self._serve_registry[adapter_name].values():
@@ -276,6 +283,20 @@ class LoRARuntime:
         """Switch the active logical adapter and runtime role."""
 
         role = normalize_adapter_role(role)
+        target_adapter_name = adapter_name
+        if role == AdapterRole.SERVE.value:
+            target_adapter_name = adapter_name or self.default_logical_adapter
+        elif role == AdapterRole.TRAIN.value:
+            target_adapter_name = adapter_name or self.current_train_owner
+        if (
+            self._merged_lora_adapter_name is not None
+            and (
+                role != AdapterRole.SERVE.value
+                or target_adapter_name != self._merged_lora_adapter_name
+            )
+        ):
+            self._unmerge_active_serve_lora()
+
         previous_adapter_name = self.active_logical_adapter_name
         previous_role = self.active_role
         if role == AdapterRole.SERVE.value:
@@ -377,6 +398,8 @@ class LoRARuntime:
         self._device = device
         moved = 0
         with torch.no_grad():
+            if self._merged_lora_adapter_name is not None:
+                self._unmerge_active_serve_lora()
             if self._adapter_offload:
                 adapters_to_move = set(self._gpu_resident_adapters)
                 adapters_to_move.add(self.active_logical_adapter_name)
@@ -421,6 +444,7 @@ class LoRARuntime:
             # During init all adapters are created on the base model's
             # device; this call forces inactive extras to CPU.
             self._maybe_offload_inactive()
+        self._merge_active_serve_lora_if_enabled()
         return moved
 
     def export_serve_state(self, adapter_name: str) -> dict[str, torch.Tensor]:
@@ -439,6 +463,8 @@ class LoRARuntime:
 
         if adapter_name not in self.logical_adapter_names:
             self.register_logical_adapter(adapter_name, init_from=self.default_logical_adapter)
+        if self._merged_lora_adapter_name == adapter_name:
+            self._unmerge_active_serve_lora()
         adapter_layers = self._serve_registry[adapter_name]
         with torch.no_grad():
             for key, tensor in state.items():
@@ -510,6 +536,8 @@ class LoRARuntime:
         owner = adapter_name or self.current_train_owner
         if owner is None or self.current_train_owner != owner:
             raise RuntimeError("no matching active train workspace to commit")
+        if self._merged_lora_adapter_name == owner:
+            self._unmerge_active_serve_lora()
         adapter_layers = self._serve_registry[owner]
         for layer_idx, module_name, module in self._manual_modules:
             weights = adapter_layers[(layer_idx, module_name)]
@@ -559,3 +587,31 @@ class LoRARuntime:
         except Exception:
             return
         clear_flashinfer_compile_cache(self.layer_plans, self.layers)
+
+    def _merge_active_serve_lora_if_enabled(self) -> None:
+        if not _single_lora_merge_enabled() or self.active_role != AdapterRole.SERVE.value:
+            return
+        adapter_name = self.active_logical_adapter_name
+        changed = False
+        for _, _, module in self._manual_modules:
+            changed = module.merge_serve_lora(adapter_name) or changed
+        if changed:
+            self._merged_lora_adapter_name = adapter_name
+            self._clear_flashinfer_effective_weight_caches()
+
+    def _unmerge_active_serve_lora(self) -> None:
+        changed = False
+        for _, _, module in self._manual_modules:
+            changed = module.unmerge_serve_lora() or changed
+        if changed:
+            self._merged_lora_adapter_name = None
+            self._clear_flashinfer_effective_weight_caches()
+
+
+def _single_lora_merge_enabled() -> bool:
+    return os.getenv("MINI_OPENCLAW_FLASHINFER_SINGLE_LORA_MERGE", "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }

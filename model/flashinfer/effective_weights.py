@@ -32,12 +32,18 @@ class EffectivePackedLinear:
 def effective_weights_enabled() -> bool:
     memory_mode = os.getenv("MINI_OPENCLAW_FLASHINFER_MEMORY_MODE", "throughput").lower()
     storage = os.getenv("MINI_OPENCLAW_FLASHINFER_PACKED_WEIGHT_STORAGE", "").lower()
+    single_lora_merge = os.getenv("MINI_OPENCLAW_FLASHINFER_SINGLE_LORA_MERGE", "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     low_vram_default = memory_mode in {"balanced", "low_vram"} or storage in {
         "shared",
         "share",
         "alias",
         "shared_storage",
-    }
+    } or single_lora_merge
     return _env_enabled(
         "MINI_OPENCLAW_FLASHINFER_EFFECTIVE_WEIGHTS",
         default=not low_vram_default,
@@ -132,6 +138,9 @@ def clear_flashinfer_effective_weight_cache(*roots: object) -> None:
 
 
 def _can_merge_serve_lora(module: torch.nn.Module) -> bool:
+    checker = getattr(module, "is_lora_merged", None)
+    if callable(checker) and checker():
+        return False
     if getattr(module, "active_role", "base") != "serve":
         return False
     if not _can_functional_linear(module):
