@@ -218,3 +218,42 @@ def test_flashinfer_plan_preserves_bfloat16_dtype_with_strict_signatures(monkeyp
     assert backend._decode_wrapper.plan_kwargs["head_dim"] == 4
     assert backend._decode_wrapper.plan_kwargs["q_data_type"] is torch.bfloat16
     assert backend._decode_wrapper.plan_kwargs["kv_data_type"] is torch.bfloat16
+
+
+def test_plan_decode_reuses_page_table_buffer():
+    from model.flashinfer.generation import _plan_decode
+
+    calls = []
+    table = SimpleNamespace(
+        paged_kv_indptr=torch.tensor([0, 1], dtype=torch.int32),
+        paged_kv_indices=torch.tensor([7], dtype=torch.int32),
+        paged_kv_last_page_len=torch.tensor([1], dtype=torch.int32),
+    )
+
+    class FakeCacheManager:
+        def build_page_table(self, spans, *, device=None, reuse_buffer=False):
+            calls.append((spans, device, reuse_buffer))
+            return table
+
+    class FakeBackend:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def plan_decode(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    backend = FakeBackend()
+    request = SimpleNamespace(prefix_spans=["prefix"], new_spans=["new"])
+
+    output = _plan_decode(
+        backend,
+        FakeCacheManager(),
+        request,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    assert output is table
+    assert calls == [(["prefix", "new"], torch.device("cpu"), True)]
+    assert backend.kwargs["paged_kv_indices"] is table.paged_kv_indices
+    assert backend.kwargs["q_data_type"] is torch.float32

@@ -10,6 +10,7 @@ from model.flashinfer import compiled_mlp, compiled_post, packed_ops
 from model.flashinfer import compile_config
 from model.flashinfer.compile_config import clear_flashinfer_compile_cache
 from model.flashinfer.norm import apply_rmsnorm
+from multilora.linear import LoRALinear, init_lora_pair
 
 
 def _linear(in_features: int, out_features: int, *, bias: bool = True) -> nn.Linear:
@@ -56,6 +57,24 @@ class TinyLayer(nn.Module):
         self.mlp = TinyMLP()
 
 
+def _merged_lora_linear(linear: nn.Linear) -> LoRALinear:
+    wrapper = LoRALinear(linear, rank=2, alpha=4.0, dropout=0.0)
+    a, b = init_lora_pair(
+        rank=2,
+        in_features=linear.in_features,
+        out_features=linear.out_features,
+        device=linear.weight.device,
+        dtype=linear.weight.dtype,
+    )
+    with torch.no_grad():
+        a.fill_(0.01)
+        b.fill_(0.02)
+    wrapper.bind_serve(a, b)
+    wrapper.set_active_serve()
+    assert wrapper.merge_serve_lora("general")
+    return wrapper
+
+
 def _expected_mlp(mlp: TinyMLP, hidden: torch.Tensor) -> torch.Tensor:
     gate_up = packed_ops.project_gate_up_packed(mlp, hidden)
     assert gate_up is not None
@@ -87,6 +106,25 @@ def test_compiled_mlp_matches_eager_and_reuses_cache(monkeypatch):
     assert len(compile_calls) == 1
     assert torch.allclose(output, _expected_mlp(mlp, hidden), rtol=1e-5, atol=1e-5)
     assert torch.allclose(cached_output, output, rtol=1e-5, atol=1e-5)
+
+
+def test_compiled_mlp_accepts_merged_lora_modules(monkeypatch):
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_COMPILE_MLP", "1")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_PACKED_MLP", "1")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_FUSED_ACT", "0")
+    monkeypatch.setattr(compiled_mlp, "can_compile_decode_tensor", lambda hidden: True)
+    monkeypatch.setattr(compiled_mlp, "compile_module", lambda module: module)
+    plan = SimpleNamespace()
+    mlp = TinyMLP()
+    mlp.gate_proj = _merged_lora_linear(mlp.gate_proj)
+    mlp.up_proj = _merged_lora_linear(mlp.up_proj)
+    mlp.down_proj = _merged_lora_linear(mlp.down_proj)
+    hidden = torch.randn(1, 1, 6)
+
+    output = compiled_mlp.run_compiled_mlp(plan, mlp, hidden)
+
+    assert output is not None
+    assert torch.allclose(output, _expected_mlp(mlp, hidden), rtol=1e-5, atol=1e-5)
 
 
 def test_compiled_mlp_returns_none_when_disabled(monkeypatch):
@@ -153,6 +191,30 @@ def test_compiled_post_attention_matches_eager_and_reuses_cache(monkeypatch):
     assert len(compile_calls) == 1
     assert torch.allclose(output, expected, rtol=1e-5, atol=1e-5)
     assert torch.allclose(cached_output, output, rtol=1e-5, atol=1e-5)
+
+
+def test_compiled_post_attention_accepts_merged_lora_o_proj(monkeypatch):
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_COMPILE_POST", "1")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_PACKED_MLP", "1")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_FUSED_ACT", "0")
+    monkeypatch.setattr(compiled_post, "can_compile_decode_tensor", lambda hidden: True)
+    monkeypatch.setattr(compiled_post, "compile_module", lambda module: module)
+    plan = SimpleNamespace(modules={})
+    layer = TinyLayer()
+    layer.self_attn.o_proj = _merged_lora_linear(layer.self_attn.o_proj)
+    hidden = torch.randn(1, 1, 6)
+    attn_output = torch.randn(1, 2, 1, 3)
+
+    output = compiled_post.run_compiled_post_attention(plan, layer, hidden, attn_output)
+
+    eager_attn = attn_output.transpose(1, 2).contiguous().view(1, 1, 6)
+    eager_attn = packed_ops.project_linear(layer.self_attn.o_proj, eager_attn)
+    eager_hidden = hidden + eager_attn
+    eager_mlp_input = apply_rmsnorm(layer.post_attention_layernorm, eager_hidden)
+    expected = eager_hidden + _expected_mlp(layer.mlp, eager_mlp_input)
+
+    assert output is not None
+    assert torch.allclose(output, expected, rtol=1e-5, atol=1e-5)
 
 
 def test_compiled_post_cudagraph_mode_marks_step_and_clones(monkeypatch):

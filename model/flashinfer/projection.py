@@ -19,7 +19,7 @@ class ProjectedQKV:
     q_bshd: torch.Tensor
     k_bshd: torch.Tensor
     v_bshd: torch.Tensor
-    v_bhsd: torch.Tensor
+    v_bhsd: torch.Tensor | None
 
 
 @dataclass(frozen=True)
@@ -106,7 +106,7 @@ def project_qkv_with_optional_norm(
         q_bshd=q_bshd,
         k_bshd=k_bshd,
         v_bshd=v_bshd,
-        v_bhsd=v_bshd.transpose(1, 2).contiguous(),
+        v_bhsd=None if bsz == 1 else v_bshd.transpose(1, 2).contiguous(),
     )
 
 
@@ -215,8 +215,14 @@ def project_qkv_with_flashinfer_rope(
     return AttentionProjectionOutput(
         q_attn_bhsd=q_attn,
         k_store_bhsd=k_store,
-        v_store_bhsd=projected.v_bhsd,
+        v_store_bhsd=_projected_v_bhsd(projected),
     )
+
+
+def _projected_v_bhsd(projected: ProjectedQKV) -> torch.Tensor:
+    if projected.v_bhsd is not None:
+        return projected.v_bhsd
+    return projected.v_bshd.transpose(1, 2).contiguous()
 
 
 def _project_with_optional_head_norm(

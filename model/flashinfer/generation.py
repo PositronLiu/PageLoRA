@@ -123,6 +123,7 @@ def _plan_decode(
     page_table = cache_mgr.build_page_table(
         [*request_cache.prefix_spans, *request_cache.new_spans],
         device=device,
+        reuse_buffer=True,
     )
     backend.plan_decode(
         paged_kv_indptr=page_table.paged_kv_indptr,

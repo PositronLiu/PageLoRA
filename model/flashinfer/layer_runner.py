@@ -76,6 +76,8 @@ def _run_flashinfer_attention(
             projected.k_bshd,
             position_ids,
         )
+        if projected.v_bhsd is None:
+            raise RuntimeError("multi-batch FlashInfer projection requires V in BHSD layout")
         K_append = K_store[0].transpose(0, 1).contiguous()
         V_append = projected.v_bhsd[0].transpose(0, 1).contiguous()
     if perf is not None:

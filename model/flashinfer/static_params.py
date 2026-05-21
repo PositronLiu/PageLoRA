@@ -50,6 +50,17 @@ class StaticPostParams:
 def resolve_linear_params(module: torch.nn.Module) -> StaticLinearParams | None:
     """Resolve a linear module into static tensors, preserving LoRA train fallback."""
 
+    if _lora_is_merged(module):
+        if not _can_functional_linear(module):
+            return None
+        weight = _linear_weight(module)
+        bias = _linear_bias(module)
+        return StaticLinearParams(
+            weight=weight,
+            bias=bias,
+            cache_key=("merged_lora_linear", _linear_cache_key(module)),
+        )
+
     active_role = getattr(module, "active_role", "base")
     if active_role == "serve":
         effective = effective_linear(module)
@@ -136,7 +147,12 @@ def resolve_norm_params(norm: torch.nn.Module) -> StaticNormParams | None:
 
 
 def _has_active_lora(module: torch.nn.Module) -> bool:
-    return getattr(module, "active_role", "base") != "base"
+    return getattr(module, "active_role", "base") != "base" and not _lora_is_merged(module)
+
+
+def _lora_is_merged(module: torch.nn.Module) -> bool:
+    checker = getattr(module, "is_lora_merged", None)
+    return bool(callable(checker) and checker())
 
 
 def _can_functional_linear(module: torch.nn.Module) -> bool:
