@@ -73,6 +73,7 @@ class LoRARuntime:
         self._device: torch.device | None = None
         self._gpu_resident_adapters: list[str] = []
         self._kvcache_manager: object | None = None
+        self._internal_adapter_names: set[str] = set()
         self._merged_lora_adapter_name: str | None = None
 
         targets = discover_lora_patch_targets(model)
@@ -229,8 +230,10 @@ class LoRARuntime:
         if not self._adapter_offload or self._device is None:
             return
         max_resident = 1 + self._adapter_offload_lru_size
-        inactive = [a for a in self._gpu_resident_adapters
-                     if a != self.active_logical_adapter_name]
+        inactive = [
+            a for a in self._gpu_resident_adapters
+            if a != self.active_logical_adapter_name and a not in self._internal_adapter_names
+        ]
         while len(self._gpu_resident_adapters) > max_resident and inactive:
             adapter = inactive.pop(0)  # oldest inactive
             self._gpu_resident_adapters.remove(adapter)
@@ -239,7 +242,7 @@ class LoRARuntime:
     def register_logical_adapter(self, adapter_name: str, init_from: str | None = None) -> None:
         """Register one logical adapter across every wrapped layer."""
 
-        if adapter_name in self.logical_adapter_names:
+        if adapter_name in self._serve_registry:
             return
 
         adapter_layers: dict[tuple[int, str], LoRAModuleWeights] = {}
@@ -274,6 +277,11 @@ class LoRARuntime:
 
         return list(self.logical_adapter_names)
 
+    def is_internal_adapter(self, adapter_name: str) -> bool:
+        """Return whether an adapter is an internal publish shadow."""
+
+        return adapter_name in self._internal_adapter_names
+
     def set_kvcache_manager(self, mgr: object) -> None:
         """Bind the managed KV cache so adapter offload can move cache state."""
 
@@ -301,7 +309,7 @@ class LoRARuntime:
         previous_role = self.active_role
         if role == AdapterRole.SERVE.value:
             adapter_name = adapter_name or self.default_logical_adapter
-            if adapter_name not in self.logical_adapter_names:
+            if adapter_name not in self._serve_registry:
                 raise KeyError(f"Unknown logical adapter: {adapter_name}")
             self.active_logical_adapter_name = adapter_name
         elif role == AdapterRole.TRAIN.value:
@@ -369,6 +377,47 @@ class LoRARuntime:
             module.materialize_train(weights.a, weights.b)
         self.current_train_owner = adapter_name
         return True
+
+    def stage_shadow_from_train(self, adapter_name: str, shadow_name: str) -> None:
+        """Copy the current train workspace into an internal serve adapter."""
+
+        if self.current_train_owner != adapter_name:
+            raise RuntimeError(
+                f"train workspace belongs to {self.current_train_owner}, cannot stage {adapter_name}"
+            )
+        if shadow_name in self._serve_registry:
+            self.drop_shadow_adapter(shadow_name)
+
+        adapter_layers: dict[tuple[int, str], LoRAModuleWeights] = {}
+        for layer_idx, module_name, module in self._manual_modules:
+            if module.train_a is None or module.train_b is None:
+                raise RuntimeError("train workspace is not materialized")
+            a = nn.Parameter(module.train_a.detach().clone(), requires_grad=False)
+            b = nn.Parameter(module.train_b.detach().clone(), requires_grad=False)
+            adapter_layers[(layer_idx, module_name)] = LoRAModuleWeights(
+                a=a,
+                b=b,
+                alpha=module.alpha,
+                rank=module.rank,
+            )
+        self._serve_registry[shadow_name] = adapter_layers
+        self._internal_adapter_names.add(shadow_name)
+        if self._adapter_offload and self._device is not None:
+            self.ensure_adapter_on_gpu(shadow_name, self._device)
+        self._clear_flashinfer_effective_weight_caches()
+
+    def drop_shadow_adapter(self, shadow_name: str) -> None:
+        """Drop an internal publish shadow adapter."""
+
+        if shadow_name not in self._internal_adapter_names:
+            return
+        if self.active_logical_adapter_name == shadow_name:
+            self.set_active(self.default_logical_adapter, AdapterRole.SERVE.value)
+        self._serve_registry.pop(shadow_name, None)
+        self._internal_adapter_names.discard(shadow_name)
+        if shadow_name in self._gpu_resident_adapters:
+            self._gpu_resident_adapters.remove(shadow_name)
+        self._clear_flashinfer_effective_weight_caches()
 
     def clear_train_workspace(self) -> None:
         """Release train ownership after a successful publish or explicit discard."""

@@ -88,10 +88,6 @@ class RadixPriorityIndex:
             )
             self.entries[key] = entry
             self.entries_by_node.setdefault(radix_node_id, set()).add(key)
-            # Push to heaps only on creation; updates happen in-place.
-            entry.version += 1
-            heapq.heappush(self._max_heap, (-entry.priority, entry.version, entry.key))
-            heapq.heappush(self._min_heap, (entry.priority, entry.version, entry.key))
 
         entry.priority = priority
         if target_len is not None:
@@ -113,6 +109,10 @@ class RadixPriorityIndex:
         if touch:
             self._touch_entry(entry, now=now)
 
+        entry.version += 1
+        heapq.heappush(self._max_heap, (-entry.priority, entry.version, entry.key))
+        heapq.heappush(self._min_heap, (entry.priority, entry.version, entry.key))
+
         return entry
 
     def remove(self, key: EntryKey) -> None:
@@ -129,6 +129,31 @@ class RadixPriorityIndex:
         for key in list(self.entries):
             if key[0] == cache_key:
                 self.remove(key)
+
+    def rename_cache_key(self, old_key: str, new_key: str) -> None:
+        """Rename all entries for one cache key, replacing existing targets."""
+
+        if old_key == new_key:
+            return
+        self.remove_cache_key(new_key)
+        for key in list(self.entries):
+            if key[0] != old_key:
+                continue
+            entry = self.entries.pop(key)
+            node_keys = self.entries_by_node.get(entry.radix_node_id)
+            if node_keys is not None:
+                node_keys.discard(key)
+            renamed_key = (new_key, entry.radix_node_id)
+            entry.key = renamed_key
+            entry.cache_key = new_key
+            entry.version += 1
+            self.entries[renamed_key] = entry
+            self.entries_by_node.setdefault(entry.radix_node_id, set()).add(renamed_key)
+            heapq.heappush(self._max_heap, (-entry.priority, entry.version, renamed_key))
+            heapq.heappush(self._min_heap, (entry.priority, entry.version, renamed_key))
+        for node_id in list(self.entries_by_node):
+            if not self.entries_by_node[node_id]:
+                self.entries_by_node.pop(node_id, None)
 
     def remove_node(self, radix_node_id: int) -> None:
         for key in list(self.entries_by_node.get(radix_node_id, ())):

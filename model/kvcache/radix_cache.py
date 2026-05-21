@@ -6,6 +6,8 @@ Large KV tensors live in ``KVCacheManager``'s block store.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from model.kvcache.radix_priority import RadixPriorityEntry, RadixPriorityIndex
 from model.kvcache.radix_storage import TokenArena, slice_block_spans, span_total_length, split_block_spans
 from model.kvcache.radix_types import (
@@ -20,6 +22,28 @@ from model.kvcache.radix_types import (
 )
 
 
+@dataclass
+class RadixHotPrefix:
+    """One hot radix prefix reconstructed from cache-access metadata."""
+
+    cache_key: str
+    radix_node_id: int
+    token_ids: tuple[int, ...]
+    target_len: int
+    score: float
+    touch_count: int
+    last_access_count: int
+
+
+@dataclass
+class _HotPrefixStats:
+    cache_key: str
+    radix_node_id: int
+    target_len: int = 0
+    touch_count: int = 0
+    last_access_count: int = 0
+
+
 class RadixPrefixCache:
     """Compressed radix tree mapping token prefixes to KV block spans."""
 
@@ -32,6 +56,7 @@ class RadixPrefixCache:
         self._next_node_id = 1
         self._clock = 0
         self.priority_index = RadixPriorityIndex()
+        self._hot_prefix_stats: dict[EntryKey, _HotPrefixStats] = {}
 
     def clear(self) -> None:
         self.__init__()
@@ -43,6 +68,24 @@ class RadixPrefixCache:
         for node in self._nodes.values():
             node.spans_by_key.pop(key, None)
         self.priority_index.remove_cache_key(key)
+        self._remove_hot_cache_key(key)
+
+    def rename_key(self, old_key: str, new_key: str) -> None:
+        """Rename one cache-key namespace across radix coverage and metadata."""
+
+        if old_key == new_key:
+            return
+        for node in self._nodes.values():
+            node.spans_by_key.pop(new_key, None)
+        self.priority_index.remove_cache_key(new_key)
+        self._remove_hot_cache_key(new_key)
+
+        for node in self._nodes.values():
+            spans = node.spans_by_key.pop(old_key, None)
+            if spans:
+                node.spans_by_key[new_key] = spans
+        self.priority_index.rename_cache_key(old_key, new_key)
+        self._rename_hot_cache_key(old_key, new_key)
 
     def remove_residual(self, adapter: str) -> None:
         self.remove_key(BR_RESIDUAL_KEY(adapter))
@@ -80,6 +123,8 @@ class RadixPrefixCache:
             common = self._common_prefix(child.edge, token_ids, pos)
             if common == 0:
                 break
+            edge_start = pos
+            edge_end = pos + child.edge.length
 
             for key in keys:
                 if not key_contiguous[key]:
@@ -92,6 +137,8 @@ class RadixPrefixCache:
                 if covered:
                     key_spans[key].extend(slice_block_spans(spans, 0, covered))
                     key_match_len[key] += covered
+                    if common == child.edge.length and covered == child.edge.length:
+                        self._touch_hot_prefix(key, child.node_id, edge_end)
                 if covered < common:
                     key_contiguous[key] = False
 
@@ -127,6 +174,62 @@ class RadixPrefixCache:
         if token_ids:
             node_id = self._ensure_boundary(token_ids, len(token_ids))
         return node_id
+
+    def prefix_tokens_for_node(self, node_id: int, length: int | None = None) -> tuple[int, ...]:
+        """Return token ids from root to one node boundary."""
+
+        node = self._nodes.get(node_id)
+        if node is None:
+            raise KeyError(f"unknown radix node: {node_id}")
+        edges: list[TokenSpan] = []
+        while node.parent_id is not None:
+            edges.append(node.edge)
+            node = self._nodes[node.parent_id]
+        tokens: list[int] = []
+        for edge in reversed(edges):
+            for offset in range(edge.length):
+                tokens.append(self._arena.token_at(edge, offset))
+        if length is not None:
+            length = min(max(0, length), len(tokens))
+            tokens = tokens[:length]
+        return tuple(tokens)
+
+    def tokens_for_node(self, node_id: int) -> tuple[int, ...]:
+        """Compatibility alias for callers that want full node-boundary tokens."""
+
+        return self.prefix_tokens_for_node(node_id)
+
+    def top_hot_prefixes(self, cache_key: str, limit: int) -> list[RadixHotPrefix]:
+        """Return the hottest complete radix prefixes for one cache key."""
+
+        limit = max(0, int(limit))
+        if limit <= 0:
+            return []
+        prefixes: list[RadixHotPrefix] = []
+        for (key, node_id), stats in self._hot_prefix_stats.items():
+            if key != cache_key or node_id not in self._nodes or stats.target_len <= 0:
+                continue
+            try:
+                token_ids = self.prefix_tokens_for_node(node_id, stats.target_len)
+            except KeyError:
+                continue
+            if not token_ids:
+                continue
+            recency_bonus = stats.last_access_count * 1e-6
+            score = stats.touch_count * 10.0 + min(stats.target_len, 8192) / 1024.0 + recency_bonus
+            prefixes.append(
+                RadixHotPrefix(
+                    cache_key=cache_key,
+                    radix_node_id=node_id,
+                    token_ids=token_ids,
+                    target_len=stats.target_len,
+                    score=score,
+                    touch_count=stats.touch_count,
+                    last_access_count=stats.last_access_count,
+                )
+            )
+        prefixes.sort(key=lambda item: (item.score, item.target_len, item.radix_node_id), reverse=True)
+        return prefixes[:limit]
 
     def insert(
         self,
@@ -280,6 +383,33 @@ class RadixPrefixCache:
         self._nodes[node.node_id] = node
         self._next_node_id += 1
         return node
+
+    def _touch_hot_prefix(self, cache_key: str, node_id: int, target_len: int) -> None:
+        key = (cache_key, node_id)
+        stats = self._hot_prefix_stats.get(key)
+        if stats is None:
+            stats = _HotPrefixStats(cache_key=cache_key, radix_node_id=node_id)
+            self._hot_prefix_stats[key] = stats
+        stats.target_len = max(stats.target_len, int(target_len))
+        stats.touch_count += 1
+        self._clock += 1
+        stats.last_access_count = self._clock
+
+    def _remove_hot_cache_key(self, cache_key: str) -> None:
+        for key in list(self._hot_prefix_stats):
+            if key[0] == cache_key:
+                self._hot_prefix_stats.pop(key, None)
+
+    def _rename_hot_cache_key(self, old_key: str, new_key: str) -> None:
+        if old_key == new_key:
+            return
+        for key in list(self._hot_prefix_stats):
+            if key[0] != old_key:
+                continue
+            stats = self._hot_prefix_stats.pop(key)
+            renamed = (new_key, key[1])
+            stats.cache_key = new_key
+            self._hot_prefix_stats[renamed] = stats
 
     def _split_child(
         self,

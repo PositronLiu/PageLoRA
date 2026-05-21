@@ -421,6 +421,8 @@ def prefill_flashinfer_paged_kv_chunk(
     *,
     adapter_name: str,
     target_len: int,
+    weight_adapter_name: str | None = None,
+    cache_adapter_name: str | None = None,
 ):
     """Populate paged KV cache for one bounded pre-prefill chunk."""
 
@@ -430,15 +432,17 @@ def prefill_flashinfer_paged_kv_chunk(
     if not isinstance(cache_mgr, FlashInferPagedKVCacheManager):
         raise RuntimeError("paged pre-prefill requires FlashInferPagedKVCacheManager")
 
+    weight_adapter = weight_adapter_name or adapter_name
+    cache_adapter = cache_adapter_name or adapter_name
     request = cache_mgr.begin_preprefill_request(
         token_ids,
-        adapter_name,
+        cache_adapter,
         target_len=target_len,
     )
     if request is None:
         completed_to = min(max(0, target_len), len(token_ids))
         return FullKVPrePrefillResult(
-            adapter_name=adapter_name,
+            adapter_name=cache_adapter,
             target_len=completed_to,
             filled_from=completed_to,
             filled_to=completed_to,
@@ -453,7 +457,7 @@ def prefill_flashinfer_paged_kv_chunk(
     segment = request.token_ids[fill_from:fill_to]
     t0 = time.perf_counter()
     try:
-        with manager.use_adapter(adapter_name, role=AdapterRole.SERVE.value):
+        with manager.use_adapter(weight_adapter, role=AdapterRole.SERVE.value):
             with manager.inference_session(enable_cache=False):
                 with torch.no_grad():
                     _run_flashinfer_prefill_segment(
@@ -467,7 +471,7 @@ def prefill_flashinfer_paged_kv_chunk(
         committed = True
         elapsed = time.perf_counter() - t0
         return FullKVPrePrefillResult(
-            adapter_name=adapter_name,
+            adapter_name=cache_adapter,
             target_len=fill_to,
             filled_from=fill_from,
             filled_to=fill_to,

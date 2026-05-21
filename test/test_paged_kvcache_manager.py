@@ -207,6 +207,34 @@ def test_paged_kv_invalidate_adapter_frees_pages():
     mgr.abort_request(miss)
 
 
+def test_paged_kv_replace_adapter_cache_moves_shadow_pages():
+    mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=8)
+    shadow = "__publish_shadow__:general:1"
+    token_ids = [4, 5, 6]
+
+    req = mgr.begin_request(token_ids, shadow)
+    k, v = _kv(3, 7)
+    mgr.append_full(0, k, v, request=req)
+    mgr.commit_request(req, token_ids)
+
+    assert mgr.allocated_pages == 2
+    assert mgr.lookup_match_len(token_ids, shadow) == 3
+    assert mgr.top_hot_prefixes(shadow, limit=1)[0].token_ids == tuple(token_ids)
+
+    mgr.replace_adapter_cache(shadow, "general")
+
+    assert mgr.allocated_pages == 2
+    assert mgr.lookup_match_len(token_ids, shadow) == 0
+    assert mgr.lookup_match_len(token_ids, "general") == 3
+    assert mgr.top_hot_prefixes(shadow, limit=1) == []
+    assert mgr.top_hot_prefixes("general", limit=1)[0].token_ids == tuple(token_ids)
+
+    mgr.invalidate_adapter(shadow)
+    assert mgr.allocated_pages == 2
+    mgr.invalidate_adapter("general")
+    assert mgr.allocated_pages == 0
+
+
 def test_paged_kv_oom_rolls_back_partial_pages():
     mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=1)
     req = mgr.begin_request([1, 2, 3], "general")

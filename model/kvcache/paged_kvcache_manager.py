@@ -21,6 +21,7 @@ from model.kvcache.flashinfer_page_table import (
 from model.kvcache.paged_kv_store import PagedKVBlockStore
 from model.kvcache.paged_kvcache_request import FlashInferPagedKVRequest
 from model.kvcache.radix_cache import RadixPrefixCache
+from model.kvcache.radix_cache import RadixHotPrefix
 from model.kvcache.radix_priority import RadixPriorityIndex
 from model.kvcache.radix_storage import slice_block_spans
 from model.kvcache.radix_types import (
@@ -418,6 +419,11 @@ class FlashInferPagedKVCacheManager:
         match = self._prefix_cache.lookup(token_ids, keys=(key,))
         return min(len(token_ids), match.key_match_len.get(key, 0))
 
+    def top_hot_prefixes(self, adapter_name: str, limit: int) -> list[RadixHotPrefix]:
+        """Return hottest full-KV prefixes for one adapter."""
+
+        return self._prefix_cache.top_hot_prefixes(FULL_KEY(adapter_name), limit)
+
     def build_page_table(
         self,
         spans: list[KVBlockSpan],
@@ -468,6 +474,19 @@ class FlashInferPagedKVCacheManager:
         self._block_store.drop_adapter(adapter)
         self._max_len_by_adapter.pop(adapter, None)
         self._latest_token_ids_by_adapter.pop(adapter, None)
+
+    def replace_adapter_cache(self, from_adapter: str, to_adapter: str) -> None:
+        """Replace one adapter's paged cache with a staged shadow cache."""
+
+        if from_adapter == to_adapter:
+            return
+        self.invalidate_adapter(to_adapter)
+        self._prefix_cache.rename_key(FULL_KEY(from_adapter), FULL_KEY(to_adapter))
+        self._block_store.rename_adapter(from_adapter, to_adapter)
+        if from_adapter in self._max_len_by_adapter:
+            self._max_len_by_adapter[to_adapter] = self._max_len_by_adapter.pop(from_adapter)
+        if from_adapter in self._latest_token_ids_by_adapter:
+            self._latest_token_ids_by_adapter[to_adapter] = self._latest_token_ids_by_adapter.pop(from_adapter)
 
     def offload_adapter_cache(self, adapter: str) -> None:
         """Move cached pages for ``adapter`` to CPU."""

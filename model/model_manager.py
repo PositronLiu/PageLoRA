@@ -328,6 +328,31 @@ class ModelManager:
                 self._kvcache_manager.invalidate_adapter(adapter_name)
         LOG(f"Committed train adapter into serve adapter={adapter_name}")
 
+    def stage_train_adapter_for_publish(self, adapter_name: str, publish_id: str) -> str:
+        """Stage the current train workspace as an internal shadow serve adapter."""
+
+        shadow_name = f"__publish_shadow__:{adapter_name}:{publish_id}"
+        self.lora_runtime.stage_shadow_from_train(adapter_name, shadow_name)
+        LOG(f"Staged train adapter for publish adapter={adapter_name} shadow={shadow_name}")
+        return shadow_name
+
+    def publish_staged_adapter(self, adapter_name: str, shadow_name: str) -> None:
+        """Publish staged train weights and adopt staged KV cache, if available."""
+
+        self.lora_runtime.commit_train_to_serve(adapter_name, clear_train=True)
+        if self._kvcache_manager is not None:
+            replace_cache = getattr(self._kvcache_manager, "replace_adapter_cache", None)
+            if callable(replace_cache):
+                replace_cache(shadow_name, adapter_name)
+            else:
+                invalidate = getattr(self._kvcache_manager, "invalidate_adapter", None)
+                if callable(invalidate):
+                    invalidate(adapter_name)
+                    invalidate(shadow_name)
+        self.lora_runtime.drop_shadow_adapter(shadow_name)
+        self.active_logical_adapter_name = adapter_name
+        LOG(f"Published staged adapter adapter={adapter_name} shadow={shadow_name}")
+
     @contextmanager
     def use_adapter(
         self,
