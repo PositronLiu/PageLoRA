@@ -227,3 +227,44 @@ def test_priority_index_remove_key_and_clear_are_synchronized():
     )
     cache.clear()
     assert len(cache.priority_index) == 0
+
+
+def test_lookup_touches_hot_prefixes_along_path():
+    cache = RadixPrefixCache()
+    key = FULL_KEY("general")
+    cache.insert_coverage([1, 2, 3, 4], key=key, start=0, spans=[KVBlockSpan(10, 0, 4)])
+    cache.insert_coverage([1, 2, 9], key=key, start=2, spans=[KVBlockSpan(11, 0, 1)])
+
+    cache.lookup([1, 2, 3, 4], keys=(key,))
+    hot = cache.top_hot_prefixes(key, limit=4)
+    token_sets = {entry.token_ids for entry in hot}
+
+    assert (1, 2) in token_sets
+    assert (1, 2, 3, 4) in token_sets
+
+
+def test_rename_key_moves_coverage_priority_and_hot_prefixes():
+    cache = RadixPrefixCache()
+    old_key = FULL_KEY("shadow")
+    new_key = FULL_KEY("general")
+    node_id = cache.ensure_token_path([4, 5, 6])
+    cache.insert_coverage([4, 5, 6], key=old_key, start=0, spans=[KVBlockSpan(20, 0, 3)])
+    cache.priority_index.upsert(
+        cache_key=old_key,
+        radix_node_id=node_id,
+        priority=5.0,
+        target_len=3,
+        token_ids=[4, 5, 6],
+    )
+    cache.lookup([4, 5, 6], keys=(old_key,))
+
+    cache.rename_key(old_key, new_key)
+
+    old_match = cache.lookup([4, 5, 6], keys=(old_key,))
+    new_match = cache.lookup([4, 5, 6], keys=(new_key,))
+    assert old_match.key_match_len[old_key] == 0
+    assert new_match.key_match_len[new_key] == 3
+    assert cache.priority_index.get((old_key, node_id)) is None
+    assert cache.priority_index.get((new_key, node_id)) is not None
+    assert cache.top_hot_prefixes(old_key, limit=1) == []
+    assert cache.top_hot_prefixes(new_key, limit=1)[0].token_ids == (4, 5, 6)

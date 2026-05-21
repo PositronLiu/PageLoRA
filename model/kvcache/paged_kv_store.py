@@ -365,6 +365,21 @@ class PagedKVBlockStore:
             self._allocator.free_page(page_id)
         self._adapter_pages.pop(adapter, None)
 
+    def rename_adapter(self, old: str, new: str) -> None:
+        """Move page ownership metadata from one adapter namespace to another."""
+
+        if old == new:
+            return
+        old_pages = self._adapter_pages.pop(old, set())
+        if not old_pages:
+            return
+        new_pages = self._adapter_pages.setdefault(new, set())
+        for page_id in old_pages:
+            page = self._pages.get(page_id)
+            if page is not None:
+                page.adapter = new
+                new_pages.add(page_id)
+
     def drop_spans(self, spans: list[KVBlockSpan]) -> None:
         """Free the physical pages referenced by ``spans``.
 

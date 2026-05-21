@@ -49,9 +49,15 @@ def fused_activation_enabled() -> bool:
     return _env_enabled("MINI_OPENCLAW_FLASHINFER_FUSED_ACT", default=True)
 
 
+def single_lora_merge_enabled() -> bool:
+    return _env_enabled("MINI_OPENCLAW_FLASHINFER_SINGLE_LORA_MERGE", default=False)
+
+
 def shared_packed_base_weight_storage_enabled() -> bool:
     """Return whether packed base weights should replace original storages."""
 
+    if single_lora_merge_enabled():
+        return True
     storage = os.getenv("MINI_OPENCLAW_FLASHINFER_PACKED_WEIGHT_STORAGE")
     if storage is not None:
         return storage.lower() in {"shared", "share", "alias", "shared_storage"}
@@ -113,20 +119,22 @@ def project_qkv_packed(
     q_module = plan.modules.get("self_attn.q_proj") or attn.q_proj
     k_module = plan.modules.get("self_attn.k_proj") or attn.k_proj
     v_module = plan.modules.get("self_attn.v_proj") or attn.v_proj
-    effective = effective_packed_linear(
-        owner=plan,
-        attr="_flashinfer_effective_qkv",
-        modules=(q_module, k_module, v_module),
-    )
-    if effective is not None:
-        q_dim, k_dim, v_dim = effective.out_features
-        qkv = F.linear(hidden, effective.weight, effective.bias)
-        return torch.split(qkv, [q_dim, k_dim, v_dim], dim=-1)
+    qkv_modules = (q_module, k_module, v_module)
+    if not any(_lora_is_merged(module) for module in qkv_modules):
+        effective = effective_packed_linear(
+            owner=plan,
+            attr="_flashinfer_effective_qkv",
+            modules=qkv_modules,
+        )
+        if effective is not None:
+            q_dim, k_dim, v_dim = effective.out_features
+            qkv = F.linear(hidden, effective.weight, effective.bias)
+            return torch.split(qkv, [q_dim, k_dim, v_dim], dim=-1)
 
     packed = _cached_packed_linear(
         owner=plan,
         attr="_flashinfer_packed_qkv",
-        modules=(q_module, k_module, v_module),
+        modules=qkv_modules,
     )
     if packed is None:
         return None
@@ -208,7 +216,7 @@ def get_base_gate_up_packed_linear(mlp: torch.nn.Module) -> PackedLinear | Effec
         owner=mlp,
         attr="_flashinfer_effective_gate_up",
         modules=(gate_module, up_module),
-    )
+    ) if not any(_lora_is_merged(module) for module in (gate_module, up_module)) else None
     if effective is not None:
         return effective
 
@@ -243,6 +251,10 @@ def project_down(mlp: torch.nn.Module, hidden: torch.Tensor) -> torch.Tensor:
 def project_linear(module: torch.nn.Module, hidden: torch.Tensor) -> torch.Tensor:
     """Run one linear module with serve effective weights when available."""
 
+    if _lora_is_merged(module):
+        if _can_functional_linear(module):
+            return F.linear(hidden, module.weight, module.bias)
+        return module(hidden)
     effective = effective_linear(module)
     if effective is not None:
         return F.linear(hidden, effective.weight, effective.bias)
@@ -378,7 +390,7 @@ def _can_functional_linear(module: torch.nn.Module) -> bool:
 
 
 def _has_active_lora(module: torch.nn.Module) -> bool:
-    return getattr(module, "active_role", "base") != "base"
+    return getattr(module, "active_role", "base") != "base" and not _lora_is_merged(module)
 
 
 def _linear_weight(module: torch.nn.Module) -> torch.Tensor:
@@ -465,6 +477,8 @@ def _lora_pack_info(
 ) -> tuple[torch.Tensor, torch.Tensor, float, tuple[object, ...]] | None:
     if module is None:
         return None
+    if _lora_is_merged(module):
+        return None
     active_role = getattr(module, "active_role", "base")
     if active_role != "serve":
         return None
@@ -518,6 +532,8 @@ def _tensor_cache_key(tensor: torch.Tensor) -> tuple[object, ...]:
 
 
 def _lora_delta(module: torch.nn.Module, hidden: torch.Tensor) -> torch.Tensor | None:
+    if _lora_is_merged(module):
+        return None
     active_role = getattr(module, "active_role", "base")
     if active_role == "base":
         return None
@@ -558,6 +574,11 @@ def _env_enabled(name: str, *, default: bool) -> bool:
     if value is None:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _lora_is_merged(module: torch.nn.Module | None) -> bool:
+    checker = getattr(module, "is_lora_merged", None)
+    return bool(callable(checker) and checker())
 
 
 def _flashinfer_memory_mode() -> str:

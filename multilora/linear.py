@@ -122,6 +122,62 @@ class LoRALinear(nn.Module):
             target_a.data.copy_(self.train_a.data.to(target_a.device))
             target_b.data.copy_(self.train_b.data.to(target_b.device))
 
+    def is_lora_merged(self) -> bool:
+        """Return whether the bound serve LoRA is folded into the base weight."""
+
+        return bool(getattr(self, "_merged_lora_adapter", None))
+
+    def merge_serve_lora(self, adapter_name: str) -> bool:
+        """Fold the active serve LoRA into ``weight`` for inference."""
+
+        if self.active_role != "serve" or self.serve_a is None or self.serve_b is None:
+            return False
+        if not self._dropout_mergeable():
+            return False
+        merged_adapter = getattr(self, "_merged_lora_adapter", None)
+        if merged_adapter == adapter_name:
+            return False
+        if merged_adapter is not None:
+            self.unmerge_serve_lora()
+
+        delta = self._serve_lora_weight_delta()
+        with torch.no_grad():
+            self.weight.data.add_(delta)
+        self._merged_lora_adapter = adapter_name
+        return True
+
+    def unmerge_serve_lora(self) -> bool:
+        """Remove a previously folded serve LoRA from ``weight``."""
+
+        if not self.is_lora_merged():
+            return False
+        if self.serve_a is None or self.serve_b is None:
+            raise RuntimeError("cannot unmerge serve LoRA without bound serve parameters")
+
+        delta = self._serve_lora_weight_delta()
+        with torch.no_grad():
+            self.weight.data.sub_(delta)
+        try:
+            delattr(self, "_merged_lora_adapter")
+        except AttributeError:
+            pass
+        return True
+
+    def _serve_lora_weight_delta(self) -> torch.Tensor:
+        if self.serve_a is None or self.serve_b is None:
+            raise RuntimeError("serve LoRA parameters are not bound")
+        return torch.matmul(
+            self.serve_b.detach().to(device=self.weight.device, dtype=self.weight.dtype),
+            self.serve_a.detach().to(device=self.weight.device, dtype=self.weight.dtype),
+        ).mul(float(self.scale))
+
+    def _dropout_mergeable(self) -> bool:
+        if isinstance(self.dropout, nn.Identity):
+            return True
+        if isinstance(self.dropout, nn.Dropout):
+            return float(self.dropout.p) == 0.0 or not self.dropout.training
+        return False
+
     def set_active_base(self) -> None:
         """Switch this layer into pure-base mode."""
 
@@ -151,7 +207,7 @@ class LoRALinear(nn.Module):
         """
 
         base = F.linear(x, self.weight, self.bias)
-        if self.active_role == "base":
+        if self.active_role == "base" or self.is_lora_merged():
             if return_lora_down:
                 return base, None
             return base

@@ -200,6 +200,64 @@ def test_project_linear_falls_back_to_lora_when_effective_disabled(monkeypatch):
     _assert_close(output, module(hidden))
 
 
+def test_project_linear_uses_merged_lora_weight(monkeypatch):
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_EFFECTIVE_WEIGHTS", "1")
+    module = LoRALinear(_linear(6, 4, bias=True), rank=2, alpha=4.0, dropout=0.0)
+    module.bind_serve(
+        nn.Parameter(torch.full((2, 6), 0.1), requires_grad=False),
+        nn.Parameter(torch.full((4, 2), 0.2), requires_grad=False),
+    )
+    module.set_active_serve()
+    hidden = torch.randn(2, 3, 6)
+    expected = module(hidden)
+
+    assert module.merge_serve_lora("general")
+    output = packed_ops.project_linear(module, hidden)
+
+    _assert_close(output, expected)
+    assert not hasattr(module, "_flashinfer_effective_linear")
+    assert module.unmerge_serve_lora()
+
+
+def test_packed_qkv_uses_merged_lora_weights(monkeypatch):
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_PACKED_QKV", "1")
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_EFFECTIVE_WEIGHTS", "1")
+    q_proj = LoRALinear(_linear(6, 8, bias=False), rank=2, alpha=4.0, dropout=0.0)
+    k_proj = LoRALinear(_linear(6, 4, bias=False), rank=2, alpha=4.0, dropout=0.0)
+    v_proj = LoRALinear(_linear(6, 4, bias=False), rank=2, alpha=4.0, dropout=0.0)
+    for index, module in enumerate((q_proj, k_proj, v_proj), start=1):
+        module.bind_serve(
+            nn.Parameter(torch.full((2, 6), 0.03 * index), requires_grad=False),
+            nn.Parameter(torch.full((module.out_features, 2), 0.04 * index), requires_grad=False),
+        )
+        module.set_active_serve()
+    attn = SimpleNamespace(
+        config=SimpleNamespace(num_attention_heads=2, num_key_value_heads=1),
+        head_dim=4,
+        q_proj=q_proj,
+        k_proj=k_proj,
+        v_proj=v_proj,
+    )
+    layer = SimpleNamespace(self_attn=attn)
+    plan = SimpleNamespace(modules={
+        "self_attn.q_proj": q_proj,
+        "self_attn.k_proj": k_proj,
+        "self_attn.v_proj": v_proj,
+    })
+    hidden = torch.randn(1, 2, 6)
+    expected = (q_proj(hidden), k_proj(hidden), v_proj(hidden))
+
+    for module in (q_proj, k_proj, v_proj):
+        assert module.merge_serve_lora("general")
+    projected = project_qkv_with_optional_norm(layer, plan, hidden)
+
+    _assert_close(projected.q_bshd.reshape(1, 2, 8), expected[0])
+    _assert_close(projected.k_bshd.reshape(1, 2, 4), expected[1])
+    _assert_close(projected.v_bshd.reshape(1, 2, 4), expected[2])
+    assert not hasattr(plan, "_flashinfer_effective_qkv")
+    assert not hasattr(plan, "_flashinfer_packed_qkv_lora_delta")
+
+
 class _TinyMLP(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -231,6 +289,14 @@ def test_balanced_memory_mode_disables_effective_weights_by_default(monkeypatch)
     monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_MEMORY_MODE", "balanced")
 
     assert not effective_weights_enabled()
+
+
+def test_single_lora_merge_disables_effective_weights_by_default(monkeypatch):
+    monkeypatch.delenv("MINI_OPENCLAW_FLASHINFER_EFFECTIVE_WEIGHTS", raising=False)
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_SINGLE_LORA_MERGE", "1")
+
+    assert not effective_weights_enabled()
+    assert packed_ops.shared_packed_base_weight_storage_enabled()
 
 
 def test_shared_packed_gate_up_storage_matches_reference(monkeypatch):
