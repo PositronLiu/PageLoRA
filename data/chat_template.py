@@ -15,7 +15,7 @@ def build_chat_prompt(tokenizer, messages: list[dict[str, Any]], tools: list[dic
         Prompt text string.
     """
 
-    if hasattr(tokenizer, "apply_chat_template"):
+    if hasattr(tokenizer, "apply_chat_template") and getattr(tokenizer, "chat_template", None):
         return tokenizer.apply_chat_template(
             messages,
             tools=tools,
