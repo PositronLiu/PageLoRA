@@ -56,6 +56,7 @@ class ModelConfig:
     flashinfer_workspace_mb: int = 128
     flashinfer_kv_append_mode: str = "manual"
     flashinfer_qk_norm: bool = False
+    flashinfer_cuda_graph_decode: bool = False
     kvcache_mode: str = "hf"
     kvcache_decompose: bool = False
     logical_adapters: tuple[str, ...] = ("general",)

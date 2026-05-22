@@ -147,6 +147,88 @@ def _run_flashinfer_attention(
     return result
 
 
+def run_flashinfer_decode_layer_static_append(
+    layer: torch.nn.Module,
+    plan,
+    layer_idx: int,
+    hidden: torch.Tensor,
+    cache_mgr: FlashInferPagedKVCacheManager,
+    position_ids: torch.Tensor,
+    *,
+    backend: FlashInferAttentionBackend,
+    page_id: torch.Tensor,
+    page_offset: torch.Tensor,
+    kv_key_index: torch.Tensor,
+    kv_value_index: torch.Tensor,
+) -> torch.Tensor:
+    """Run one single-token decode layer with graph-replayable KV append."""
+
+    bsz, seqlen, _ = hidden.shape
+    if bsz != 1 or seqlen != 1:
+        raise RuntimeError("CUDA graph decode currently requires batch=1 and seqlen=1")
+
+    normed = apply_rmsnorm(layer.input_layernorm, hidden)
+    projected = project_qkv_with_optional_norm(
+        layer,
+        plan,
+        normed,
+        use_flashinfer_norm=getattr(backend, "use_flashinfer_qk_norm", False),
+    )
+    q_attn, k_append = apply_flashinfer_rope_pos_ids_for_append(
+        layer,
+        projected.q_bshd,
+        projected.k_bshd,
+        position_ids,
+    )
+    v_append = projected.v_bshd[0].contiguous()
+
+    layer_cache = cache_mgr.layer_cache(layer_idx)
+    if layer_cache is None:
+        raise RuntimeError("FlashInfer paged KV requires a dense paged_kv_cache")
+    _append_decode_kv_static(
+        layer_cache,
+        page_id=page_id,
+        page_offset=page_offset,
+        kv_key_index=kv_key_index,
+        kv_value_index=kv_value_index,
+        k_nhd=k_append,
+        v_nhd=v_append,
+    )
+
+    attn_output = backend.run_decode(q_attn, layer_cache)
+    attn_output = attn_output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
+    o_module = plan.modules.get("self_attn.o_proj") or layer.self_attn.o_proj
+    attn_output = project_linear(o_module, attn_output)
+    hidden = hidden + attn_output
+    mlp_input = apply_rmsnorm(layer.post_attention_layernorm, hidden)
+    mlp_output = _run_mlp_eager(layer.mlp, mlp_input)
+    return hidden + mlp_output
+
+
+def _append_decode_kv_static(
+    layer_cache: torch.Tensor,
+    *,
+    page_id: torch.Tensor,
+    page_offset: torch.Tensor,
+    kv_key_index: torch.Tensor,
+    kv_value_index: torch.Tensor,
+    k_nhd: torch.Tensor,
+    v_nhd: torch.Tensor,
+) -> None:
+    """Append one decode token using tensor indices that can vary on replay."""
+
+    layer_cache.index_put_((page_id, kv_key_index, page_offset), k_nhd, accumulate=False)
+    layer_cache.index_put_((page_id, kv_value_index, page_offset), v_nhd, accumulate=False)
+
+
+def _run_mlp_eager(mlp: torch.nn.Module, hidden: torch.Tensor) -> torch.Tensor:
+    gate_up = project_gate_up_packed(mlp, hidden)
+    if gate_up is None:
+        return mlp(hidden)
+    activated = apply_gate_up_activation(gate_up, mlp.act_fn)
+    return project_down(mlp, activated)
+
+
 def _run_mlp(
     mlp: torch.nn.Module,
     hidden: torch.Tensor,

@@ -73,6 +73,12 @@ class PagedKVBlockStore:
 
         return self.paged_kv_cache is not None
 
+    @property
+    def dense_capacity_pages(self) -> int:
+        """Return the current dense paged-KV tensor capacity."""
+
+        return self._dense_capacity
+
     def reset_perf_counters(self) -> None:
         """Clear page-store performance counters."""
 
@@ -281,6 +287,40 @@ class PagedKVBlockStore:
             return None
         return self.paged_kv_cache[layer_idx]
 
+    def ensure_dense_cache_shape(
+        self,
+        *,
+        layer_idx: int,
+        required_pages: int,
+        num_kv_heads: int,
+        head_dim: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> None:
+        """Ensure the dense cache can hold ``required_pages`` pages."""
+
+        if required_pages <= self._dense_capacity:
+            return
+        if self._num_layers is None:
+            return
+        if layer_idx < 0 or layer_idx >= self._num_layers:
+            raise ValueError("layer_idx out of range")
+        if num_kv_heads <= 0 or head_dim <= 0:
+            raise ValueError("KV shape must be positive")
+        self._allocate_dense_cache(
+            required_pages=required_pages,
+            num_kv_heads=int(num_kv_heads),
+            head_dim=int(head_dim),
+            dtype=dtype,
+            device=device,
+        )
+
+    def touch_spans(self, spans: list[KVBlockSpan], device: torch.device) -> None:
+        """Mark page spans as resident/accessed without writing through Python."""
+
+        for span in spans:
+            self._touch_page(span, device)
+
     def put(
         self,
         *,
@@ -431,7 +471,6 @@ class PagedKVBlockStore:
         if layer_idx < 0 or layer_idx >= self._num_layers:
             raise ValueError("layer_idx out of range")
 
-        t0 = time.perf_counter()
         if k.ndim == 4:
             _, num_kv_heads, _, head_dim = k.shape
         elif k.ndim == 3:
@@ -440,6 +479,24 @@ class PagedKVBlockStore:
             raise ValueError("KV tensor must have BHSD or NHD layout")
         dtype = self._dtype or k.dtype
         device = self._device or k.device
+        self._allocate_dense_cache(
+            required_pages=required_pages,
+            num_kv_heads=int(num_kv_heads),
+            head_dim=int(head_dim),
+            dtype=dtype,
+            device=device,
+        )
+
+    def _allocate_dense_cache(
+        self,
+        *,
+        required_pages: int,
+        num_kv_heads: int,
+        head_dim: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> None:
+        t0 = time.perf_counter()
         if self._max_pages > 0:
             if required_pages > self._max_pages:
                 raise RuntimeError("paged KV dense cache capacity exceeded")

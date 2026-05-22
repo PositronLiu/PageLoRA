@@ -93,6 +93,7 @@ class FlashInferPerfTrace:
             f"generated={generated_tokens} cached={cached_tokens} current_pos={current_pos} "
             f"elapsed_s={elapsed:.4f} tokens_per_s={tps:.4f} "
             f"decode_plan_s={self._section('decode_plan_s'):.4f} "
+            f"decode_cuda_graph_s={self._section('decode_cuda_graph_s'):.4f} "
             f"decode_layers_s={self._section('decode_layers_s'):.4f} "
             f"decode_lm_head_s={self._section('decode_lm_head_s'):.4f} "
             f"manager_page_table_s={cache_snapshot.get('manager_build_page_table_s', 0.0):.4f} "
@@ -143,6 +144,7 @@ class FlashInferPerfTrace:
             "decode_embed_s",
             "decode_reserve_s",
             "decode_plan_s",
+            "decode_cuda_graph_s",
             "decode_layers_s",
             "decode_final_norm_s",
             "decode_lm_head_project_s",

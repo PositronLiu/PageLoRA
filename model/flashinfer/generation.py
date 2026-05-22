@@ -16,6 +16,10 @@ from core.constants import (
 from core.utils import LOG
 from multilora.runtime import AdapterRole
 from model.flashinfer.attention_backend import FlashInferAttentionBackend
+from model.flashinfer.cuda_graph import (
+    FlashInferDecodeCudaGraphRunner,
+    can_use_flashinfer_cuda_graph_decode,
+)
 from model.flashinfer.layer_runner import _run_flashinfer_attention
 from model.flashinfer.norm import apply_rmsnorm
 from model.flashinfer.perf import FlashInferPerfTrace
@@ -263,6 +267,14 @@ def generate_with_flashinfer_kvcache(
             and not compute_logprobs
             and repetition_penalty == 1.0
         )
+        decode_graph: FlashInferDecodeCudaGraphRunner | None = None
+        if can_use_flashinfer_cuda_graph_decode(
+            manager,
+            use_gpu_greedy=use_gpu_greedy,
+            max_new_tokens=max_new_tokens,
+        ):
+            decode_graph = FlashInferDecodeCudaGraphRunner(manager, backend, cache_mgr)
+            LOG("FlashInfer CUDA graph decode enabled")
         token_histories: list[list[int]] | None = None if use_gpu_greedy else [prompt_ids + generated_ids]
         current_pos = len(prompt_ids)
         decode_position_ids = torch.empty((1, 1), device=device, dtype=torch.long)
@@ -312,6 +324,52 @@ def generate_with_flashinfer_kvcache(
             if token_id is not None and not ignore_eos and token_id == tokenizer.eos_token_id:
                 break
 
+            reserved_spans = None
+            page_table: FlashInferPageTable | None = None
+            chunk_index = len(request_cache.page_span_chunks)
+            if decode_graph is not None and token_tensor is not None:
+                reserve_t0 = perf.tic()
+                reserved_spans = cache_mgr.reserve_chunk(request_cache, 1)
+                perf.add("decode_reserve_s", reserve_t0)
+                plan_t0 = perf.tic()
+                page_table = _plan_decode(
+                    backend,
+                    cache_mgr,
+                    request_cache,
+                    device=device,
+                    dtype=model.get_input_embeddings().weight.dtype,
+                )
+                perf.add("decode_plan_s", plan_t0)
+                graph_t0 = perf.tic()
+                graph_logits = decode_graph.run(
+                    token_tensor=token_tensor,
+                    position=current_pos,
+                    chunk_spans=reserved_spans,
+                    page_table_pages=page_table.paged_kv_indices.numel(),
+                )
+                perf.add("decode_cuda_graph_s", graph_t0)
+                if graph_logits is not None:
+                    cache_mgr.mark_graph_decode_chunk_written(
+                        request_cache,
+                        chunk_index=chunk_index,
+                        num_layers=len(manager.lora_runtime.layers),
+                        device=device,
+                    )
+                    cached_generated_token_tensors.append(token_tensor.squeeze(1).detach())
+                    logits = graph_logits
+                    current_pos += 1
+                    perf.log_decode_progress(
+                        generated_tokens=len(generated_token_tensors),
+                        cached_tokens=len(cached_generated_token_tensors),
+                        current_pos=current_pos,
+                        started=t0,
+                        cache_snapshot=cache_mgr.perf_snapshot(),
+                    )
+                    continue
+                if decode_graph.disabled_reason is not None:
+                    LOG(f"FlashInfer CUDA graph decode fallback: {decode_graph.disabled_reason}")
+                    decode_graph = None
+
             embed_t0 = perf.tic()
             if token_tensor is None:
                 token_tensor = torch.tensor([[token_id]], device=device, dtype=torch.long)
@@ -320,18 +378,20 @@ def generate_with_flashinfer_kvcache(
             position_ids = decode_position_ids
             perf.add("decode_embed_s", embed_t0)
 
-            reserve_t0 = perf.tic()
-            cache_mgr.reserve_chunk(request_cache, 1)
-            perf.add("decode_reserve_s", reserve_t0)
-            plan_t0 = perf.tic()
-            _plan_decode(
-                backend,
-                cache_mgr,
-                request_cache,
-                device=device,
-                dtype=hidden.dtype,
-            )
-            perf.add("decode_plan_s", plan_t0)
+            if reserved_spans is None:
+                reserve_t0 = perf.tic()
+                cache_mgr.reserve_chunk(request_cache, 1)
+                perf.add("decode_reserve_s", reserve_t0)
+            if page_table is None:
+                plan_t0 = perf.tic()
+                _plan_decode(
+                    backend,
+                    cache_mgr,
+                    request_cache,
+                    device=device,
+                    dtype=hidden.dtype,
+                )
+                perf.add("decode_plan_s", plan_t0)
             layers_t0 = perf.tic()
             for layer_idx, layer in enumerate(manager.lora_runtime.layers):
                 hidden = _run_flashinfer_attention(

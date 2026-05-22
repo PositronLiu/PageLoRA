@@ -104,6 +104,12 @@ class FlashInferPagedKVCacheManager:
         return self._block_store.allocated_pages
 
     @property
+    def dense_capacity_pages(self) -> int:
+        """Return the current dense FlashInfer cache capacity."""
+
+        return self._block_store.dense_capacity_pages
+
+    @property
     def free_pages(self) -> int:
         """Return reusable physical page count."""
 
@@ -151,6 +157,50 @@ class FlashInferPagedKVCacheManager:
         """Return one layer's dense paged cache tensor for FlashInfer."""
 
         return self._block_store.layer_cache(layer_idx)
+
+    def ensure_dense_cache_shape(
+        self,
+        *,
+        layer_idx: int,
+        required_pages: int,
+        num_kv_heads: int,
+        head_dim: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> None:
+        """Ensure the dense paged cache has enough capacity for graph writes."""
+
+        self._block_store.ensure_dense_cache_shape(
+            layer_idx=layer_idx,
+            required_pages=required_pages,
+            num_kv_heads=num_kv_heads,
+            head_dim=head_dim,
+            dtype=dtype,
+            device=device,
+        )
+
+    def mark_graph_decode_chunk_written(
+        self,
+        request: FlashInferPagedKVRequest,
+        *,
+        chunk_index: int,
+        num_layers: int,
+        device: torch.device,
+    ) -> None:
+        """Advance request metadata after CUDA graph writes a decode KV chunk."""
+
+        if chunk_index < 0 or chunk_index >= len(request.page_span_chunks):
+            raise RuntimeError("missing reserved page spans for graph KV chunk")
+        spans = request.page_span_chunks[chunk_index]
+        self._block_store.touch_spans(spans, device)
+        for layer_idx in range(num_layers):
+            current = request.layer_chunk_counts.get(layer_idx, 0)
+            if current != chunk_index:
+                raise RuntimeError("graph decode chunk metadata is out of sync")
+            request.layer_chunk_counts[layer_idx] = chunk_index + 1
+        self._perf_add("manager_append_full_calls", float(num_layers))
+        self._perf_add("manager_append_full_nhd_calls", float(num_layers))
+        self._perf_add("manager_append_full_tokens", float(num_layers * sum(span.length for span in spans)))
 
     def begin_request(
         self,

@@ -252,6 +252,7 @@ def _make_flashinfer_manager(args: argparse.Namespace, device: torch.device) -> 
             flashinfer_workspace_mb=args.flashinfer_workspace_mb,
             flashinfer_kv_append_mode=args.flashinfer_kv_append_mode,
             flashinfer_qk_norm=args.flashinfer_qk_norm,
+            flashinfer_cuda_graph_decode=getattr(args, "flashinfer_cuda_graph_decode", False),
             kvcache_mode="flashinfer",
             kvcache_decompose=False,
             logical_adapters=("general",),
@@ -905,6 +906,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use flashinfer.norm.rmsnorm for q_norm/k_norm when compatible.",
     )
     parser.add_argument(
+        "--flashinfer-cuda-graph-decode",
+        action="store_true",
+        help="Capture and replay the FlashInfer single-token decode path with CUDA graphs when supported.",
+    )
+    parser.add_argument(
         "--flashinfer-cache-policy",
         choices=("cold", "hot"),
         default="cold",
@@ -977,6 +983,7 @@ def run_benchmark(
     print(f"flashinfer_cache_policy={args.flashinfer_cache_policy}")
     print(f"flashinfer_kv_append_mode={args.flashinfer_kv_append_mode}")
     print(f"flashinfer_qk_norm={args.flashinfer_qk_norm}")
+    print(f"flashinfer_cuda_graph_decode={args.flashinfer_cuda_graph_decode}")
     print(f"vllm_enable_prefix_caching={args.vllm_enable_prefix_caching}")
     print(f"vllm_max_model_len={args.vllm_max_model_len or 'default'}")
     print(f"vllm_enforce_eager={args.vllm_enforce_eager}")
