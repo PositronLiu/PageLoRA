@@ -16,9 +16,13 @@ def _select_single_adapter_cache_mode(config: object) -> str:
     """Resolve cache mode when MultiLoRA routing/evolution is disabled."""
 
     requested_mode = getattr(config, "kvcache_mode", "hf")
-    if getattr(config, "enable_flashinfer_paged_kv", False) or requested_mode == "flashinfer":
+    if requested_mode in {"hf", "full", "br", "flashinfer"}:
+        return requested_mode
+    if getattr(config, "enable_flashinfer_paged_kv", False):
         return "flashinfer"
-    if requested_mode == "full" or not getattr(config, "enable_br_cache", True):
+    if getattr(config, "kvcache_decompose", False):
+        return "br"
+    if not getattr(config, "enable_br_cache", True):
         return "full"
     return "hf"
 
@@ -81,7 +85,7 @@ class ModelManager:
         self.cpu_offload = config.cpu_offload
         self.default_logical_adapter = config.default_logical_adapter
         self.active_logical_adapter_name = config.default_logical_adapter
-        if config.kvcache_mode == "hf":
+        if config.kvcache_mode in {"hf", "auto"}:
             if config.enable_multilora:
                 if config.enable_br_cache:
                     config.kvcache_mode = "br"
