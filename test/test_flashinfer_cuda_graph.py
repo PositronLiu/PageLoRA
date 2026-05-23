@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import torch
 
 from model.flashinfer.cuda_graph import (
+    DecodeGraphEntry,
+    DecodeGraphKey,
     FlashInferDecodeCudaGraphRunner,
     can_use_flashinfer_cuda_graph_decode,
     flashinfer_cuda_graph_decode_enabled,
@@ -78,6 +80,30 @@ def test_manager_graph_chunk_metadata_advances_all_layers():
     assert request.layer_chunk_counts == {0: 1, 1: 1}
 
 
+def test_page_table_buffer_signature_tracks_reusable_decode_buffers():
+    manager = FlashInferPagedKVCacheManager(
+        1,
+        page_size=4,
+        max_pages=0,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    assert manager.page_table_buffer_signature() == (0, 0, 0)
+    table = manager.build_page_table(
+        [SimpleNamespace(block_id=2, start=0, length=3)],
+        device=torch.device("cpu"),
+        reuse_buffer=True,
+    )
+
+    signature = manager.page_table_buffer_signature()
+    assert signature == (
+        table.paged_kv_indptr.data_ptr(),
+        table.paged_kv_indices.data_ptr(),
+        table.paged_kv_last_page_len.data_ptr(),
+    )
+
+
 def test_decode_graph_span_validation_requires_single_token_chunk():
     span = FlashInferDecodeCudaGraphRunner._single_decode_span
 
@@ -85,3 +111,42 @@ def test_decode_graph_span_validation_requires_single_token_chunk():
     assert span([SimpleNamespace(length=2, block_id=0, start=0)]) is None
     valid = SimpleNamespace(length=1, block_id=0, start=0)
     assert span([valid]) is valid
+
+
+def test_decode_graph_cache_evicts_oldest_bucket(monkeypatch):
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_CUDA_GRAPH_MAX_ENTRIES", "2")
+    runner = object.__new__(FlashInferDecodeCudaGraphRunner)
+    runner._graphs = {}
+
+    class FakeGraph:
+        def replay(self):
+            pass
+
+    def make_key(page_table_pages: int) -> DecodeGraphKey:
+        return DecodeGraphKey(
+            model_id=1,
+            backend_id=2,
+            cache_data_ptr=3,
+            cache_shape=(1, 4),
+            cache_dtype=torch.float32,
+            page_indptr_data_ptr=5,
+            page_indices_data_ptr=6,
+            page_last_len_data_ptr=7,
+            token_shape=(1, 1),
+            position_shape=(1, 1),
+            page_table_pages=page_table_pages,
+            active_adapter="general",
+            active_role="serve",
+            runtime_version=0,
+        )
+
+    for pages in (1, 2, 3):
+        runner._store_graph(
+            make_key(pages),
+            DecodeGraphEntry(graph=FakeGraph(), logits=torch.zeros(1)),
+        )
+
+    assert runner.graph_count == 2
+    assert make_key(1) not in runner._graphs
+    assert make_key(2) in runner._graphs
+    assert make_key(3) in runner._graphs

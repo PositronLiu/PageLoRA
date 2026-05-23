@@ -114,6 +114,54 @@ def _make_backend(manager: "ModelManager") -> FlashInferAttentionBackend:
     return backend
 
 
+def _backend_cache_key(manager: "ModelManager") -> tuple[object, ...]:
+    """Return the static backend properties used for cache reuse."""
+
+    if not manager.lora_runtime.layers:
+        raise RuntimeError("FlashInfer generation requires at least one decoder layer")
+    layer = manager.lora_runtime.layers[0]
+    attn_config = layer.self_attn.config
+    return (
+        manager.device,
+        getattr(manager.config, "flashinfer_workspace_mb", 128),
+        int(attn_config.num_attention_heads),
+        int(attn_config.num_key_value_heads),
+        int(layer.self_attn.head_dim),
+        getattr(manager.config, "flashinfer_page_size", 32),
+        bool(getattr(manager.config, "flashinfer_qk_norm", False)),
+    )
+
+
+def _get_backend(manager: "ModelManager") -> FlashInferAttentionBackend:
+    """Return a manager-scoped FlashInfer backend with stable wrapper state."""
+
+    key = _backend_cache_key(manager)
+    cached = getattr(manager, "_flashinfer_backend_entry", None)
+    if cached is not None:
+        cached_key, cached_backend = cached
+        if cached_key == key:
+            return cached_backend
+    backend = _make_backend(manager)
+    setattr(manager, "_flashinfer_backend_entry", (key, backend))
+    setattr(manager, "_flashinfer_decode_graph_runner", None)
+    return backend
+
+
+def _get_decode_graph_runner(
+    manager: "ModelManager",
+    backend: FlashInferAttentionBackend,
+    cache_mgr: FlashInferPagedKVCacheManager,
+) -> FlashInferDecodeCudaGraphRunner:
+    """Return a persistent decode CUDA graph runner for the current backend."""
+
+    runner = getattr(manager, "_flashinfer_decode_graph_runner", None)
+    if isinstance(runner, FlashInferDecodeCudaGraphRunner) and runner.is_compatible(backend, cache_mgr):
+        return runner
+    runner = FlashInferDecodeCudaGraphRunner(manager, backend, cache_mgr)
+    setattr(manager, "_flashinfer_decode_graph_runner", runner)
+    return runner
+
+
 def _plan_decode(
     backend: FlashInferAttentionBackend,
     cache_mgr: FlashInferPagedKVCacheManager,
@@ -227,7 +275,7 @@ def generate_with_flashinfer_kvcache(
     perf = FlashInferPerfTrace(device)
     generation_t0 = perf.tic()
     backend_t0 = perf.tic()
-    backend = _make_backend(manager)
+    backend = _get_backend(manager)
     perf.add("backend_create_s", backend_t0)
     begin_t0 = perf.tic()
     request_cache = cache_mgr.begin_request(prompt_ids, adapter_name)
@@ -273,8 +321,8 @@ def generate_with_flashinfer_kvcache(
             use_gpu_greedy=use_gpu_greedy,
             max_new_tokens=max_new_tokens,
         ):
-            decode_graph = FlashInferDecodeCudaGraphRunner(manager, backend, cache_mgr)
-            LOG("FlashInfer CUDA graph decode enabled")
+            decode_graph = _get_decode_graph_runner(manager, backend, cache_mgr)
+            LOG(f"FlashInfer CUDA graph decode enabled cached={decode_graph.graph_count}")
         token_histories: list[list[int]] | None = None if use_gpu_greedy else [prompt_ids + generated_ids]
         current_pos = len(prompt_ids)
         decode_position_ids = torch.empty((1, 1), device=device, dtype=torch.long)

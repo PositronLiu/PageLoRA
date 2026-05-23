@@ -506,6 +506,18 @@ class FlashInferPagedKVCacheManager:
         self._perf_add("manager_build_page_table_pages", float(table.paged_kv_indices.numel()))
         return table
 
+    def page_table_buffer_signature(self) -> tuple[int, int, int]:
+        """Return reusable decode page-table buffer pointers for graph keys."""
+
+        buffer = self._page_table_buffer
+        if buffer is None:
+            return (0, 0, 0)
+        return (
+            int(buffer.paged_kv_indptr.data_ptr()),
+            int(buffer.paged_kv_indices.data_ptr()),
+            int(buffer.paged_kv_last_page_len.data_ptr()),
+        )
+
     def _flashinfer_usable_prefix_len(
         self,
         spans: list[KVBlockSpan],

@@ -77,6 +77,7 @@ class LoRARuntime:
         self._memory_coordinator: object | None = memory_coordinator
         self._internal_adapter_names: set[str] = set()
         self._merged_lora_adapter_name: str | None = None
+        self._flashinfer_graph_version = 0
 
         targets = discover_lora_patch_targets(model)
         self.layers: list[nn.Module] = targets["layers"]
@@ -351,6 +352,12 @@ class LoRARuntime:
         """Return the logical adapter currently owning the train workspace."""
 
         return self.current_train_owner
+
+    @property
+    def flashinfer_graph_version(self) -> int:
+        """Return a version that invalidates cached FlashInfer CUDA graphs."""
+
+        return self._flashinfer_graph_version
 
     def prepare_train_workspace(
         self,
@@ -636,6 +643,8 @@ class LoRARuntime:
 
     def _clear_flashinfer_effective_weight_caches(self) -> None:
         """Clear optional FlashInfer serve-time merged-weight and compile caches."""
+
+        self._flashinfer_graph_version += 1
 
         try:
             from model.flashinfer.effective_weights import clear_flashinfer_effective_weight_cache

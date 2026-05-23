@@ -61,14 +61,27 @@ class DecodeGraphKey:
     """Static properties that make a captured decode graph reusable."""
 
     model_id: int
+    backend_id: int
     cache_data_ptr: int
     cache_shape: tuple[int, ...]
     cache_dtype: torch.dtype
+    page_indptr_data_ptr: int
+    page_indices_data_ptr: int
+    page_last_len_data_ptr: int
     token_shape: tuple[int, ...]
     position_shape: tuple[int, ...]
     page_table_pages: int
     active_adapter: str | None
     active_role: str | None
+    runtime_version: int
+
+
+@dataclass
+class DecodeGraphEntry:
+    """Captured graph and its graph-owned output tensor."""
+
+    graph: torch.cuda.CUDAGraph
+    logits: torch.Tensor
 
 
 class FlashInferDecodeCudaGraphRunner:
@@ -90,9 +103,7 @@ class FlashInferDecodeCudaGraphRunner:
         self.page_offset_buf = torch.empty((1,), device=self.device, dtype=torch.long)
         self.kv_key_index = torch.zeros((1,), device=self.device, dtype=torch.long)
         self.kv_value_index = torch.ones((1,), device=self.device, dtype=torch.long)
-        self._graph: torch.cuda.CUDAGraph | None = None
-        self._graph_key: DecodeGraphKey | None = None
-        self._static_logits: torch.Tensor | None = None
+        self._graphs: dict[DecodeGraphKey, DecodeGraphEntry] = {}
         self._disabled_reason: str | None = None
         self._capture_count = 0
 
@@ -101,6 +112,26 @@ class FlashInferDecodeCudaGraphRunner:
         """Return why graph replay was permanently disabled, if any."""
 
         return self._disabled_reason
+
+    def is_compatible(
+        self,
+        backend: "FlashInferAttentionBackend",
+        cache_mgr: FlashInferPagedKVCacheManager,
+    ) -> bool:
+        """Return whether this runner can be reused for the given state."""
+
+        return self.backend is backend and self.cache_mgr is cache_mgr
+
+    @property
+    def graph_count(self) -> int:
+        """Return the number of cached decode graph buckets."""
+
+        return len(self._graphs)
+
+    def clear(self) -> None:
+        """Drop captured graph buckets."""
+
+        self._graphs.clear()
 
     def run(
         self,
@@ -130,34 +161,34 @@ class FlashInferDecodeCudaGraphRunner:
         self.page_offset_buf.fill_(int(span.start))
 
         key = self._make_key(cache, page_table_pages=page_table_pages)
-        if self._graph is None or self._graph_key != key:
-            if not self._capture(key):
+        entry = self._graphs.get(key)
+        if entry is None:
+            entry = self._capture(key)
+            if entry is None:
                 return None
 
-        if self._graph is None or self._static_logits is None:
-            return None
-        self._graph.replay()
-        return self._static_logits
+        entry.graph.replay()
+        return entry.logits
 
-    def _capture(self, key: DecodeGraphKey) -> bool:
+    def _capture(self, key: DecodeGraphKey) -> DecodeGraphEntry | None:
         try:
-            self._capture_graph(key)
+            entry = self._capture_graph()
         except Exception as exc:  # pragma: no cover - depends on CUDA/FlashInfer runtime
             self._disabled_reason = str(exc)
-            self._graph = None
-            self._graph_key = None
-            self._static_logits = None
+            self._graphs.clear()
             WARNING(f"FlashInfer CUDA graph decode disabled after capture failure: {exc}")
-            return False
+            return None
         self._capture_count += 1
+        self._store_graph(key, entry)
         LOG(
             "FlashInfer CUDA graph decode captured "
             f"count={self._capture_count} pages={key.page_table_pages} "
-            f"cache_pages={key.cache_shape[1] if len(key.cache_shape) > 1 else 0}"
+            f"cache_pages={key.cache_shape[1] if len(key.cache_shape) > 1 else 0} "
+            f"cached={len(self._graphs)}"
         )
-        return True
+        return entry
 
-    def _capture_graph(self, key: DecodeGraphKey) -> None:
+    def _capture_graph(self) -> DecodeGraphEntry:
         warmup_stream = torch.cuda.Stream(device=self.device)
         current_stream = torch.cuda.current_stream(self.device)
         warmup_stream.wait_stream(current_stream)
@@ -168,9 +199,17 @@ class FlashInferDecodeCudaGraphRunner:
 
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph):
-            self._static_logits = self._decode_static()
-        self._graph = graph
-        self._graph_key = key
+            logits = self._decode_static()
+        return DecodeGraphEntry(graph=graph, logits=logits)
+
+    def _store_graph(self, key: DecodeGraphKey, entry: DecodeGraphEntry) -> None:
+        max_entries = _env_int("MINI_OPENCLAW_FLASHINFER_CUDA_GRAPH_MAX_ENTRIES", default=32)
+        if max_entries <= 0:
+            self._graphs.clear()
+            return
+        while len(self._graphs) >= max_entries:
+            self._graphs.pop(next(iter(self._graphs)))
+        self._graphs[key] = entry
 
     def _decode_static(self) -> torch.Tensor:
         model = self.manager.model
@@ -206,16 +245,22 @@ class FlashInferDecodeCudaGraphRunner:
 
     def _make_key(self, cache: torch.Tensor, *, page_table_pages: int) -> DecodeGraphKey:
         runtime = self.manager.lora_runtime
+        page_indptr_ptr, page_indices_ptr, page_last_len_ptr = self.cache_mgr.page_table_buffer_signature()
         return DecodeGraphKey(
             model_id=id(self.manager.model),
+            backend_id=id(self.backend),
             cache_data_ptr=int(cache.data_ptr()),
             cache_shape=tuple(int(dim) for dim in cache.shape),
             cache_dtype=cache.dtype,
+            page_indptr_data_ptr=page_indptr_ptr,
+            page_indices_data_ptr=page_indices_ptr,
+            page_last_len_data_ptr=page_last_len_ptr,
             token_shape=tuple(int(dim) for dim in self.token_buf.shape),
             position_shape=tuple(int(dim) for dim in self.position_buf.shape),
             page_table_pages=int(page_table_pages),
             active_adapter=getattr(runtime, "active_logical_adapter_name", None),
             active_role=getattr(runtime, "active_role", None),
+            runtime_version=int(getattr(runtime, "flashinfer_graph_version", 0)),
         )
 
     @staticmethod
@@ -233,3 +278,13 @@ def _env_enabled(name: str, *, default: bool) -> bool:
     if value is None:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, *, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
