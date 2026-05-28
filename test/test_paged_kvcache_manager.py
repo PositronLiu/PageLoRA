@@ -49,6 +49,28 @@ def test_paged_kv_cache_reuses_same_adapter_prefix():
     mgr.abort_request(hit)
 
 
+def test_paged_kv_commit_preserves_suffix_after_aligned_replay():
+    mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=8)
+    req = mgr.begin_request([1, 2, 3], "general")
+    k, v = _kv(3, 1)
+    mgr.append_full(0, k, v, request=req)
+    mgr.commit_request(req, [1, 2, 3])
+
+    replay = mgr.begin_request([1, 2, 3, 4], "general")
+    assert replay.match_len == 3
+    assert replay.prefill_from == 2
+    replay_k, replay_v = _kv(2, 9)
+    mgr.append_full(0, replay_k, replay_v, request=replay)
+    mgr.commit_request(replay, [1, 2, 3, 4])
+
+    assert mgr.lookup_match_len([1, 2, 3, 4], "general") == 4
+
+    hit = mgr.begin_request([1, 2, 3, 4], "general")
+    assert hit.match_len == 4
+    assert hit.prefill_from == 2
+    mgr.abort_request(hit)
+
+
 def test_paged_kv_cache_is_adapter_specific():
     mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2)
     req = mgr.begin_request([1, 2, 3], "general")

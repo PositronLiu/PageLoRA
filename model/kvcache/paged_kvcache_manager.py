@@ -24,6 +24,7 @@ from model.kvcache.radix_cache import RadixPrefixCache
 from model.kvcache.radix_cache import RadixHotPrefix
 from model.kvcache.radix_priority import RadixPriorityIndex
 from model.kvcache.radix_storage import slice_block_spans
+from model.kvcache.radix_storage import span_total_length
 from model.kvcache.radix_types import (
     FULL_KEY,
     KVBlockSpan,
@@ -338,7 +339,10 @@ class FlashInferPagedKVCacheManager:
         # append_full writes request-local chunks into pages immediately.
         # Commit only inserts the non-prefix suffix into radix metadata.
         coalesce_t0 = time.perf_counter()
-        commit_spans = [] if skip else _coalesce_block_spans(request.new_spans)
+        commit_len = max(0, final_len - start)
+        commit_spans = _coalesce_block_spans(
+            slice_block_spans(request.new_spans, skip, commit_len)
+        )
         self._perf_add("manager_commit_coalesce_s", time.perf_counter() - coalesce_t0)
         if commit_spans:
             try:
@@ -358,13 +362,14 @@ class FlashInferPagedKVCacheManager:
                 self._block_store.drop_spans(request.new_spans)
                 request.new_spans = []
                 raise
-        elif request.new_spans:
-            # If a request had to replay already-cached tokens to keep the
-            # FlashInfer page table aligned, its request-local pages overlap
-            # existing radix coverage and should not be committed as fragments.
-            self._block_store.drop_spans(request.new_spans)
+        if request.new_spans:
+            committed_page_ids = {span.block_id for span in commit_spans}
+            uncommitted_spans = [
+                span for span in request.new_spans if span.block_id not in committed_page_ids
+            ]
+            self._block_store.drop_spans(uncommitted_spans)
 
-        cached_len = final_len if commit_spans else start
+        cached_len = start + span_total_length(commit_spans)
         self._max_len_by_adapter[request.adapter_name] = max(
             self._max_len_by_adapter.get(request.adapter_name, 0),
             cached_len,

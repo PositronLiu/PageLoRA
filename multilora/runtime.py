@@ -29,7 +29,7 @@ def normalize_adapter_role(name: str | None) -> str:
         return AdapterRole.SERVE.value
     if name in (AdapterRole.TRAIN.value,):
         return AdapterRole.TRAIN.value
-    if name in (AdapterRole.BASE.value, "ref", "reference"):
+    if name in (AdapterRole.BASE.value,):
         return AdapterRole.BASE.value
     raise ValueError(f"Unknown adapter role: {name}")
 
