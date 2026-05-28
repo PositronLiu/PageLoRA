@@ -270,6 +270,11 @@ class ModelManager:
 
         return self.active_logical_adapter_name
 
+    def adapter_version(self, adapter_name: str | None = None) -> int:
+        """Return the current serve-version counter for one logical adapter."""
+
+        return self.lora_runtime.adapter_version(adapter_name or self.active_logical_adapter_name)
+
     @property
     def kvcache_manager(self):
         """Return the managed radix KV cache manager, or ``None``."""

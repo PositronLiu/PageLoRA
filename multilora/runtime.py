@@ -78,6 +78,7 @@ class LoRARuntime:
         self._internal_adapter_names: set[str] = set()
         self._merged_lora_adapter_name: str | None = None
         self._flashinfer_graph_version = 0
+        self.adapter_versions: dict[str, int] = {}
 
         targets = discover_lora_patch_targets(model)
         self.layers: list[nn.Module] = targets["layers"]
@@ -282,6 +283,10 @@ class LoRARuntime:
 
         self._serve_registry[adapter_name] = adapter_layers
         self.logical_adapter_names.append(adapter_name)
+        if init_from is not None:
+            self.adapter_versions.setdefault(adapter_name, self.adapter_version(init_from))
+        else:
+            self.adapter_versions.setdefault(adapter_name, 0)
 
         if self._adapter_offload and self._device is not None and adapter_name != self.active_logical_adapter_name:
             self.offload_adapter_to_cpu(adapter_name)
@@ -295,6 +300,16 @@ class LoRARuntime:
         """Return whether an adapter is an internal publish shadow."""
 
         return adapter_name in self._internal_adapter_names
+
+    def adapter_version(self, adapter_name: str) -> int:
+        """Return the current serve-version counter for one logical adapter."""
+
+        return int(self.adapter_versions.get(adapter_name, 0))
+
+    def _bump_adapter_version(self, adapter_name: str) -> int:
+        version = self.adapter_version(adapter_name) + 1
+        self.adapter_versions[adapter_name] = version
+        return version
 
     def set_kvcache_manager(self, mgr: object) -> None:
         """Bind the managed KV cache so adapter offload can move cache state."""
@@ -422,6 +437,7 @@ class LoRARuntime:
             )
         self._serve_registry[shadow_name] = adapter_layers
         self._internal_adapter_names.add(shadow_name)
+        self.adapter_versions[shadow_name] = self.adapter_version(adapter_name)
         if self._adapter_offload and self._device is not None:
             self.ensure_adapter_on_gpu(shadow_name, self._device)
         self._clear_flashinfer_effective_weight_caches()
@@ -434,6 +450,7 @@ class LoRARuntime:
         if self.active_logical_adapter_name == shadow_name:
             self.set_active(self.default_logical_adapter, AdapterRole.SERVE.value)
         self._serve_registry.pop(shadow_name, None)
+        self.adapter_versions.pop(shadow_name, None)
         self._internal_adapter_names.discard(shadow_name)
         if shadow_name in self._gpu_resident_adapters:
             self._gpu_resident_adapters.remove(shadow_name)
@@ -551,6 +568,7 @@ class LoRARuntime:
                 elif leaf_name == "lora_serve_b":
                     weights.b.data.copy_(tensor.to(weights.b.device))
         self._clear_flashinfer_effective_weight_caches()
+        self._bump_adapter_version(adapter_name)
         if self.active_role == AdapterRole.SERVE.value and self.active_logical_adapter_name == adapter_name:
             self._broadcast_active()
 
@@ -612,6 +630,7 @@ class LoRARuntime:
             weights = adapter_layers[(layer_idx, module_name)]
             module.commit_train_to_serve(weights.a, weights.b)
         self._clear_flashinfer_effective_weight_caches()
+        self._bump_adapter_version(owner)
         if clear_train:
             self.clear_train_workspace()
         elif self.active_role == AdapterRole.SERVE.value and self.active_logical_adapter_name == owner:

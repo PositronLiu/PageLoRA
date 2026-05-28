@@ -517,6 +517,7 @@ def generate_with_flashinfer_kvcache(
                 "total_s": total_s,
                 "prefill_s": prefill_s,
                 "decode_s": decode_s,
+                "cache_match_tokens": request_cache.match_len,
             },
         )
     finally:
