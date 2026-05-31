@@ -66,6 +66,39 @@ def _build_left_padded_batch(
     return input_ids, attention_mask
 
 
+def _embedding_vocab_size(model) -> int | None:
+    get_embeddings = getattr(model, "get_input_embeddings", None)
+    if not callable(get_embeddings):
+        return None
+    embeddings = get_embeddings()
+    size = getattr(embeddings, "num_embeddings", None)
+    if size is None:
+        return None
+    return int(size)
+
+
+def _resolve_generation_pad_token_id(tokenizer, model) -> int:
+    vocab_size = _embedding_vocab_size(model)
+
+    def valid(token_id: int | None) -> bool:
+        if token_id is None:
+            return False
+        if token_id < 0:
+            return False
+        return vocab_size is None or token_id < vocab_size
+
+    for candidate in (
+        tokenizer.pad_token_id,
+        tokenizer.eos_token_id,
+        tokenizer.bos_token_id,
+        0,
+    ):
+        if valid(candidate):
+            return int(candidate)
+
+    raise ValueError("No valid pad/eos/bos token id is within the model embedding vocabulary")
+
+
 def _apply_repetition_penalty(
     logits: torch.Tensor,
     token_histories: list[list[int]],
@@ -279,6 +312,7 @@ def generate_with_logprobs(
     model = manager.model
     tokenizer = manager.tokenizer
     device = manager.device
+    pad_token_id = _resolve_generation_pad_token_id(tokenizer, model)
 
     input_ids = torch.tensor([prompt_ids], device=device, dtype=torch.long)
     attention_mask = torch.ones_like(input_ids)
@@ -295,7 +329,7 @@ def generate_with_logprobs(
         "top_p": top_p,
         "top_k": top_k,
         "repetition_penalty": hf_repetition_penalty,
-        "pad_token_id": tokenizer.pad_token_id,
+        "pad_token_id": pad_token_id,
         "eos_token_id": None if ignore_eos else tokenizer.eos_token_id,
         "forced_eos_token_id": None,
         "return_dict_in_generate": True,
@@ -362,9 +396,7 @@ def generate_batch(
     tokenizer = manager.tokenizer
     device = manager.device
 
-    pad_token_id = tokenizer.pad_token_id
-    if pad_token_id is None:
-        raise ValueError("tokenizer.pad_token_id must be set for batched generation")
+    pad_token_id = _resolve_generation_pad_token_id(tokenizer, model)
 
     input_ids, attention_mask = _build_left_padded_batch(
         batch_prompt_ids,
