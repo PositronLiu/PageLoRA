@@ -49,6 +49,43 @@ def test_paged_kv_cache_reuses_same_adapter_prefix():
     mgr.abort_request(hit)
 
 
+def test_paged_kv_syncs_kvcache_bytes_and_release_for_train():
+    class Memory:
+        def __init__(self) -> None:
+            self.bytes_by_adapter = {}
+            self.accesses = []
+
+        def set_kvcache_bytes(self, adapter: str, num_bytes: int) -> None:
+            self.bytes_by_adapter[adapter] = num_bytes
+
+        def notify_kvcache_access(self, adapter: str) -> None:
+            self.accesses.append(adapter)
+
+        def maybe_offload(self) -> int:
+            return 0
+
+    memory = Memory()
+    mgr = FlashInferPagedKVCacheManager(
+        num_layers=1,
+        page_size=2,
+        max_pages=8,
+        memory_coordinator=memory,
+    )
+    req = mgr.begin_request([1, 2, 3], "general")
+    k, v = _kv(3, 1)
+    mgr.append_full(0, k, v, request=req)
+    mgr.commit_request(req, [1, 2, 3])
+
+    assert memory.bytes_by_adapter["general"] > 0
+    assert memory.accesses == ["general"]
+    assert mgr.allocated_pages == 2
+
+    mgr.release_adapter_cache_for_train("general")
+
+    assert mgr.allocated_pages == 0
+    assert memory.bytes_by_adapter["general"] == 0
+
+
 def test_paged_kv_commit_preserves_suffix_after_aligned_replay():
     mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=8)
     req = mgr.begin_request([1, 2, 3], "general")

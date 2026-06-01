@@ -228,6 +228,10 @@ class ModelManager:
                         f"qkv={stats['qkv']} gate_up={stats['gate_up']}"
                     )
 
+    @property
+    def memory_coordinator(self) -> MemoryAwareCoordinator | None:
+        return self._memory_coordinator
+
     def _enable_gradient_checkpointing_inputs(self) -> None:
         """Ensure checkpointed forwards still see grad-requiring inputs.
 

@@ -37,6 +37,7 @@ class OffloadCandidate:
     name: str
     bytes: int
     last_access: int = 0
+    touch_count: int = 0
 
     _KIND_WEIGHT: dict[str, float] = field(
         default_factory=lambda: {"adapter": 1.5, "kvcache_adapter": 1.0},
@@ -47,7 +48,21 @@ class OffloadCandidate:
     @property
     def priority(self) -> float:
         w = self._KIND_WEIGHT.get(self.kind, 1.0)
-        return self.bytes * w / (1.0 + self.last_access)
+        return self.bytes * w / ((1.0 + self.last_access) * (1.0 + self.touch_count))
+
+
+@dataclass(frozen=True)
+class TrainMemoryEstimate:
+    """Predicted incremental GPU memory needed by one train step."""
+
+    sample_count: int
+    max_seq_len: int
+    activation_bytes: int
+    fixed_workspace_bytes: int
+
+    @property
+    def extra_bytes(self) -> int:
+        return self.activation_bytes + self.fixed_workspace_bytes
 
 
 class MemoryAwareCoordinator:
@@ -58,14 +73,28 @@ class MemoryAwareCoordinator:
         *,
         target_fraction: float = 0.85,
         device: torch.device | None = None,
+        train_hidden_size: int = 4096,
+        train_dtype_bytes: int = 2,
+        train_activation_multiplier: float = 8.0,
+        train_fixed_workspace_bytes: int = 512 * 1024 * 1024,
+        train_safety_margin_bytes: int = 512 * 1024 * 1024,
+        free_memory_fn: object | None = None,
     ) -> None:
         self.target_fraction = max(0.1, min(1.0, float(target_fraction)))
         self._device = device
+        self.train_hidden_size = max(1, int(train_hidden_size))
+        self.train_dtype_bytes = max(1, int(train_dtype_bytes))
+        self.train_activation_multiplier = max(0.0, float(train_activation_multiplier))
+        self.train_fixed_workspace_bytes = max(0, int(train_fixed_workspace_bytes))
+        self.train_safety_margin_bytes = max(0, int(train_safety_margin_bytes))
+        self._free_memory_fn = free_memory_fn
 
         self.adapter_weight_bytes: dict[str, int] = {}
         self.kvcache_bytes: dict[str, int] = {}
         self._adapter_last_access: dict[str, int] = {}
         self._kvcache_last_access: dict[str, int] = {}
+        self._adapter_touch_count: dict[str, int] = {}
+        self._kvcache_touch_count: dict[str, int] = {}
         self._access_clock = 0
         self._active_adapter = ""
 
@@ -99,6 +128,15 @@ class MemoryAwareCoordinator:
     def register_kvcache_bytes(self, adapter_name: str, num_bytes: int) -> None:
         self.kvcache_bytes[adapter_name] = self.kvcache_bytes.get(adapter_name, 0) + int(num_bytes)
 
+    def set_kvcache_bytes(self, adapter_name: str, num_bytes: int) -> None:
+        """Set the current GPU-resident KV byte estimate for one adapter."""
+
+        num_bytes = int(num_bytes)
+        if num_bytes <= 0:
+            self.kvcache_bytes.pop(adapter_name, None)
+            return
+        self.kvcache_bytes[adapter_name] = num_bytes
+
     def set_active_adapter(self, adapter_name: str) -> None:
         self._active_adapter = adapter_name
 
@@ -107,9 +145,6 @@ class MemoryAwareCoordinator:
     def check_pressure(self) -> MemoryPressure:
         """Return current GPU memory pressure level."""
         if self._device is not None and self._device.type == "cpu":
-            return MemoryPressure.LOW
-
-        if not torch.cuda.is_available():
             return MemoryPressure.LOW
 
         try:
@@ -138,10 +173,12 @@ class MemoryAwareCoordinator:
     def notify_adapter_access(self, adapter_name: str) -> None:
         self._access_clock += 1
         self._adapter_last_access[adapter_name] = self._access_clock
+        self._adapter_touch_count[adapter_name] = self._adapter_touch_count.get(adapter_name, 0) + 1
 
     def notify_kvcache_access(self, adapter_name: str) -> None:
         self._access_clock += 1
         self._kvcache_last_access[adapter_name] = self._access_clock
+        self._kvcache_touch_count[adapter_name] = self._kvcache_touch_count.get(adapter_name, 0) + 1
 
     # ── size estimation ────────────────────────────────────────────
 
@@ -150,6 +187,31 @@ class MemoryAwareCoordinator:
 
     def estimate_kvcache_bytes(self, adapter_name: str) -> int:
         return self.kvcache_bytes.get(adapter_name, 0)
+
+    def estimate_train_memory(self, *, sample_count: int, max_seq_len: int) -> TrainMemoryEstimate:
+        """Predict incremental train-step memory from batch shape.
+
+        The model is intentionally simple and conservative: LoRA training with
+        checkpointing is dominated by activation/workspace growth proportional
+        to batch tokens, plus a fixed temporary workspace for logits/loss and
+        allocator fragmentation.
+        """
+
+        sample_count = max(0, int(sample_count))
+        max_seq_len = max(0, int(max_seq_len))
+        token_count = sample_count * max_seq_len
+        activation_bytes = int(
+            token_count
+            * self.train_hidden_size
+            * self.train_dtype_bytes
+            * self.train_activation_multiplier
+        )
+        return TrainMemoryEstimate(
+            sample_count=sample_count,
+            max_seq_len=max_seq_len,
+            activation_bytes=activation_bytes,
+            fixed_workspace_bytes=self.train_fixed_workspace_bytes,
+        )
 
     # ── candidate building ─────────────────────────────────────────
 
@@ -172,6 +234,7 @@ class MemoryAwareCoordinator:
                     name=name,
                     bytes=num_bytes,
                     last_access=self._adapter_last_access.get(name, 0),
+                    touch_count=self._adapter_touch_count.get(name, 0),
                 )
             )
 
@@ -186,6 +249,7 @@ class MemoryAwareCoordinator:
                     name=name,
                     bytes=num_bytes,
                     last_access=self._kvcache_last_access.get(name, 0),
+                    touch_count=self._kvcache_touch_count.get(name, 0),
                 )
             )
 
@@ -193,6 +257,31 @@ class MemoryAwareCoordinator:
         return candidates
 
     # ── offload ────────────────────────────────────────────────────
+
+    def prepare_for_train(self, *, sample_count: int, max_seq_len: int) -> int:
+        """Free cold GPU-resident state if the next train step is predicted to need it."""
+
+        estimate = self.estimate_train_memory(sample_count=sample_count, max_seq_len=max_seq_len)
+        required = estimate.extra_bytes + self.train_safety_margin_bytes
+        free = self._free_gpu_bytes()
+        shortfall = required - free
+        if shortfall <= 0:
+            return 0
+        return self.offload_until_bytes(shortfall)
+
+    def offload_until_bytes(self, target_bytes: int) -> int:
+        """Offload candidates by priority until at least ``target_bytes`` is freed."""
+
+        target_bytes = max(0, int(target_bytes))
+        if target_bytes <= 0:
+            return 0
+
+        total_freed = 0
+        for candidate in self.get_offload_candidates():
+            if total_freed >= target_bytes:
+                break
+            total_freed += self._offload_one(candidate)
+        return total_freed
 
     def maybe_offload(
         self,
@@ -218,9 +307,7 @@ class MemoryAwareCoordinator:
         for candidate in candidates:
             if total_freed >= target_bytes:
                 break
-
-            freed = self._offload_one(candidate)
-            total_freed += freed
+            total_freed += self._offload_one(candidate)
 
         return total_freed
 
@@ -236,7 +323,9 @@ class MemoryAwareCoordinator:
 
         if candidate.kind == "kvcache_adapter":
             if self._kvcache_manager is not None:
-                offload_fn = getattr(self._kvcache_manager, "offload_adapter_cache", None)
+                offload_fn = getattr(self._kvcache_manager, "release_adapter_cache_for_train", None)
+                if not callable(offload_fn):
+                    offload_fn = getattr(self._kvcache_manager, "offload_adapter_cache", None)
                 if callable(offload_fn):
                     offload_fn(candidate.name)
             self.kvcache_bytes.pop(candidate.name, None)
@@ -244,10 +333,21 @@ class MemoryAwareCoordinator:
 
         return 0
 
+    def _free_gpu_bytes(self) -> int:
+        if callable(self._free_memory_fn):
+            return max(0, int(self._free_memory_fn()))
+        if self._device is not None and self._device.type == "cpu":
+            return 2**63 - 1
+        if not torch.cuda.is_available():
+            return 2**63 - 1
+        try:
+            free, _total = torch.cuda.mem_get_info()
+            return int(free)
+        except (RuntimeError, AssertionError):
+            return 2**63 - 1
+
     def _bytes_to_free(self, target: MemoryPressure) -> int:
         """Estimate bytes to free to reach *target* pressure level."""
-        if not torch.cuda.is_available():
-            return 0
         try:
             allocated = torch.cuda.memory_allocated()
             reserved = torch.cuda.memory_reserved()
@@ -296,6 +396,8 @@ class MemoryAwareCoordinator:
             "kvcache_bytes": dict(self.kvcache_bytes),
             "adapter_last_access": dict(self._adapter_last_access),
             "kvcache_last_access": dict(self._kvcache_last_access),
+            "adapter_touch_count": dict(self._adapter_touch_count),
+            "kvcache_touch_count": dict(self._kvcache_touch_count),
             "access_clock": self._access_clock,
             "active_adapter": self._active_adapter,
         }
@@ -305,6 +407,8 @@ class MemoryAwareCoordinator:
         self.kvcache_bytes = state.get("kvcache_bytes", {})
         self._adapter_last_access = state.get("adapter_last_access", {})
         self._kvcache_last_access = state.get("kvcache_last_access", {})
+        self._adapter_touch_count = state.get("adapter_touch_count", {})
+        self._kvcache_touch_count = state.get("kvcache_touch_count", {})
         self._access_clock = state.get("access_clock", 0)
         self._active_adapter = state.get("active_adapter", "")
 

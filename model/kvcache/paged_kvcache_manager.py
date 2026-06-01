@@ -383,6 +383,9 @@ class FlashInferPagedKVCacheManager:
         self._perf_add("manager_commit_spans", float(len(commit_spans)))
 
         if self._memory_coordinator is not None:
+            set_bytes = getattr(self._memory_coordinator, "set_kvcache_bytes", None)
+            if callable(set_bytes):
+                set_bytes(request.adapter_name, self._block_store.adapter_bytes(request.adapter_name))
             self._memory_coordinator.notify_kvcache_access(request.adapter_name)
             self._memory_coordinator.maybe_offload()
 
@@ -547,6 +550,10 @@ class FlashInferPagedKVCacheManager:
         self._block_store.drop_adapter(adapter)
         self._max_len_by_adapter.pop(adapter, None)
         self._latest_token_ids_by_adapter.pop(adapter, None)
+        if self._memory_coordinator is not None:
+            set_bytes = getattr(self._memory_coordinator, "set_kvcache_bytes", None)
+            if callable(set_bytes):
+                set_bytes(adapter, 0)
 
     def replace_adapter_cache(self, from_adapter: str, to_adapter: str) -> None:
         """Replace one adapter's paged cache with a staged shadow cache."""
@@ -565,6 +572,11 @@ class FlashInferPagedKVCacheManager:
         """Move cached pages for ``adapter`` to CPU."""
 
         self._block_store.offload_adapter_cache(adapter)
+
+    def release_adapter_cache_for_train(self, adapter: str) -> None:
+        """Free paged KV pages before train; page-level CPU offload is not implemented."""
+
+        self.invalidate_adapter(adapter)
 
     def ensure_adapter_cache_on_device(self, adapter: str, device: torch.device) -> None:
         """Move cached pages for ``adapter`` to ``device``."""

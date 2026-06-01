@@ -404,6 +404,16 @@ class PagedKVBlockStore:
             self._pages.pop(page_id, None)
             self._allocator.free_page(page_id)
         self._adapter_pages.pop(adapter, None)
+        if not self._pages:
+            self.paged_kv_cache = None
+            self._dense_capacity = 0
+
+    def adapter_bytes(self, adapter: str) -> int:
+        page_ids = self._adapter_pages.get(adapter, ())
+        if not page_ids or self.paged_kv_cache is None:
+            return 0
+        per_page = self.paged_kv_cache[:, :1].numel() * self.paged_kv_cache.element_size()
+        return len(page_ids) * per_page
 
     def rename_adapter(self, old: str, new: str) -> None:
         """Move page ownership metadata from one adapter namespace to another."""
