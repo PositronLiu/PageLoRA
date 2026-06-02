@@ -68,6 +68,20 @@ class PagedKVBlockStore:
         return self._allocator.free_pages
 
     @property
+    def max_pages(self) -> int:
+        """Return the configured physical page cap, or 0 when uncapped."""
+
+        return self._max_pages
+
+    @property
+    def available_pages(self) -> int:
+        """Return pages that can still be allocated before hitting the cap."""
+
+        if self._max_pages <= 0:
+            return 2**30
+        return max(0, self._max_pages - self.allocated_pages)
+
+    @property
     def can_use_dense_cache(self) -> bool:
         """Return whether a FlashInfer-compatible dense cache is available."""
 

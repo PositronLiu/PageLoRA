@@ -116,6 +116,60 @@ class FlashInferPagedKVCacheManager:
 
         return self._block_store.free_pages
 
+    @property
+    def max_pages(self) -> int:
+        """Return the configured physical page cap, or 0 when uncapped."""
+
+        return self._block_store.max_pages
+
+    @property
+    def available_pages(self) -> int:
+        """Return pages that can still be allocated before hitting the cap."""
+
+        return self._block_store.available_pages
+
+    def estimate_request_new_pages(
+        self,
+        request: FlashInferPagedKVRequest,
+        *,
+        prefill_tokens: int,
+        max_decode_tokens: int,
+    ) -> int:
+        """Conservatively estimate new pages needed by one request."""
+
+        del request
+        tokens = max(0, int(prefill_tokens)) + max(0, int(max_decode_tokens))
+        if tokens == 0:
+            return 0
+        return (tokens + self._page_size - 1) // self._page_size
+
+    def can_fit_request(
+        self,
+        request: FlashInferPagedKVRequest,
+        *,
+        prefill_tokens: int,
+        max_decode_tokens: int,
+        reserve_pages: int = 4,
+    ) -> bool:
+        needed_pages = self.estimate_request_new_pages(
+            request,
+            prefill_tokens=prefill_tokens,
+            max_decode_tokens=max_decode_tokens,
+        )
+        return needed_pages + max(0, int(reserve_pages)) <= self.available_pages
+
+    def max_decode_tokens_that_fit(
+        self,
+        request: FlashInferPagedKVRequest,
+        *,
+        prefill_tokens: int,
+        requested_decode_tokens: int,
+        reserve_pages: int = 4,
+    ) -> int:
+        del request
+        token_budget = max(0, self.available_pages - max(0, int(reserve_pages))) * self._page_size
+        return max(0, min(int(requested_decode_tokens), token_budget - max(0, int(prefill_tokens))))
+
     def reset_perf_counters(self) -> None:
         """Clear manager and store performance counters."""
 
@@ -575,6 +629,11 @@ class FlashInferPagedKVCacheManager:
 
     def release_adapter_cache_for_train(self, adapter: str) -> None:
         """Free paged KV pages before train; page-level CPU offload is not implemented."""
+
+        self.invalidate_adapter(adapter)
+
+    def release_adapter_cache_for_generation(self, adapter: str) -> None:
+        """Free paged KV pages before foreground generation admission retry."""
 
         self.invalidate_adapter(adapter)
 

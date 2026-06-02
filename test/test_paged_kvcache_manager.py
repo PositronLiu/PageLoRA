@@ -86,6 +86,34 @@ def test_paged_kv_syncs_kvcache_bytes_and_release_for_train():
     assert memory.bytes_by_adapter["general"] == 0
 
 
+def test_paged_kv_page_admission_uses_unallocated_capacity():
+    mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=8)
+    req = mgr.begin_request([1, 2, 3], "general")
+
+    assert mgr.available_pages == 8
+    assert mgr.estimate_request_new_pages(req, prefill_tokens=3, max_decode_tokens=3) == 3
+    assert mgr.can_fit_request(req, prefill_tokens=3, max_decode_tokens=3, reserve_pages=1)
+    assert mgr.max_decode_tokens_that_fit(req, prefill_tokens=3, requested_decode_tokens=20, reserve_pages=1) == 11
+
+    mgr.abort_request(req)
+
+
+def test_paged_kv_page_admission_detects_cached_request_over_budget():
+    mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=5)
+    first = mgr.begin_request([1, 2, 3, 4, 5, 6], "general")
+    k, v = _kv(6, 1)
+    mgr.append_full(0, k, v, request=first)
+    mgr.commit_request(first, [1, 2, 3, 4, 5, 6])
+    assert mgr.allocated_pages == 3
+
+    replay = mgr.begin_request([1, 2, 3, 4, 5, 6, 7, 8], "general")
+    assert replay.match_len == 6
+    assert not mgr.can_fit_request(replay, prefill_tokens=2, max_decode_tokens=4, reserve_pages=1)
+    assert mgr.max_decode_tokens_that_fit(replay, prefill_tokens=2, requested_decode_tokens=4, reserve_pages=1) == 0
+
+    mgr.abort_request(replay)
+
+
 def test_paged_kv_commit_preserves_suffix_after_aligned_replay():
     mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=8)
     req = mgr.begin_request([1, 2, 3], "general")

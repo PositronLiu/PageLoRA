@@ -26,6 +26,7 @@ from model.flashinfer.perf import FlashInferPerfTrace
 from model.flashinfer.packed_ops import project_linear
 from model.flashinfer.sampling import greedy_argmax_token
 from model.kvcache.flashinfer_page_table import FlashInferPageTable
+from model.kvcache.page_admission import admit_paged_kv_request
 from model.kvcache.paged_kvcache_manager import FlashInferPagedKVCacheManager
 from model.kvcache.paged_kvcache_request import FlashInferPagedKVRequest
 
@@ -290,6 +291,18 @@ def generate_with_flashinfer_kvcache(
         )
 
     new_ids = prompt_ids[prefill_from:]
+    admission = admit_paged_kv_request(
+        cache_mgr,
+        prompt_ids=prompt_ids,
+        adapter_name=adapter_name,
+        request_cache=request_cache,
+        max_new_tokens=max_new_tokens,
+        log_fn=LOG,
+    )
+    request_cache = admission.request
+    new_ids = admission.new_ids
+    max_new_tokens = admission.max_new_tokens
+    prefill_from = request_cache.prefill_from
 
     try:
         LOG(f"FlashInfer paged prefill: {len(new_ids)} tokens (cache_start={prefill_from})")
