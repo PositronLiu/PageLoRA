@@ -60,6 +60,16 @@ class _FakeCacheManager:
         return self.second_decode_fit
 
 
+class _PreservingFakeCacheManager(_FakeCacheManager):
+    def __init__(self) -> None:
+        super().__init__(first_fit=False, second_decode_fit=16)
+        self.non_current_release_calls: list[tuple[str, _Request]] = []
+
+    def release_non_current_cache_for_generation(self, adapter_name: str, request: _Request) -> int:
+        self.non_current_release_calls.append((adapter_name, request))
+        return 3
+
+
 def test_page_admission_flushes_cached_request_that_would_not_fit() -> None:
     mgr = _FakeCacheManager(first_fit=False, second_decode_fit=16)
     request = mgr.begin_request(list(range(10)), "general")
@@ -77,6 +87,28 @@ def test_page_admission_flushes_cached_request_that_would_not_fit() -> None:
     assert mgr.begin_calls == 2
     assert result.request.prefill_from == 0
     assert result.new_ids == list(range(10))
+    assert result.max_new_tokens == 16
+    assert result.cache_released
+
+
+def test_page_admission_preserves_current_request_when_non_current_release_fits() -> None:
+    mgr = _PreservingFakeCacheManager()
+    request = mgr.begin_request(list(range(10)), "general")
+
+    result = admit_paged_kv_request(
+        mgr,
+        prompt_ids=list(range(10)),
+        adapter_name="general",
+        request_cache=request,
+        max_new_tokens=16,
+    )
+
+    assert mgr.non_current_release_calls == [("general", request)]
+    assert mgr.abort_calls == 0
+    assert mgr.release_calls == []
+    assert mgr.begin_calls == 1
+    assert result.request is request
+    assert result.new_ids == [8, 9]
     assert result.max_new_tokens == 16
     assert result.cache_released
 

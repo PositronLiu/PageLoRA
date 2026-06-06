@@ -68,6 +68,30 @@ def admit_paged_kv_request(
             max_new_tokens=max_new_tokens,
         )
 
+    release_non_current_fn = getattr(cache_mgr, "release_non_current_cache_for_generation", None)
+    if callable(release_non_current_fn):
+        _log(
+            log_fn,
+            "FlashInfer page admission miss; releasing non-current KV cache "
+            f"adapter={adapter_name} prompt_tokens={len(prompt_ids)} "
+            f"requested_decode={max_new_tokens}",
+        )
+        freed_pages = int(release_non_current_fn(adapter_name, request_cache) or 0)
+        prefill_from = int(getattr(request_cache, "prefill_from"))
+        new_ids = prompt_ids[prefill_from:]
+        if cache_mgr.can_fit_request(
+            request_cache,
+            prefill_tokens=len(new_ids),
+            max_decode_tokens=max_new_tokens,
+            reserve_pages=reserve_pages,
+        ):
+            return PagedKVAdmissionResult(
+                request=request_cache,
+                new_ids=new_ids,
+                max_new_tokens=max_new_tokens,
+                cache_released=freed_pages > 0,
+            )
+
     cache_mgr.abort_request(request_cache)
     _log(
         log_fn,

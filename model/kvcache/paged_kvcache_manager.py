@@ -615,6 +615,25 @@ class FlashInferPagedKVCacheManager:
 
         return self._prefix_cache.top_hot_prefixes(FULL_KEY(adapter_name), limit)
 
+    def score_prefix_candidate(
+        self,
+        adapter_name: str,
+        token_ids: list[int],
+        *,
+        target_len: int,
+        current_match_len: int = 0,
+        limit: int = 16,
+    ) -> float:
+        """Score a background prefill candidate against hot radix prefixes."""
+
+        return self._prefix_cache.score_prefix_candidate(
+            FULL_KEY(adapter_name),
+            token_ids,
+            target_len=target_len,
+            current_match_len=current_match_len,
+            limit=limit,
+        )
+
     def build_page_table(
         self,
         spans: list[KVBlockSpan],
@@ -723,10 +742,7 @@ class FlashInferPagedKVCacheManager:
         self._block_store.drop_adapter(adapter)
         self._max_len_by_adapter.pop(adapter, None)
         self._latest_token_ids_by_adapter.pop(adapter, None)
-        if self._memory_coordinator is not None:
-            set_bytes = getattr(self._memory_coordinator, "set_kvcache_bytes", None)
-            if callable(set_bytes):
-                set_bytes(adapter, 0)
+        self._set_kvcache_bytes(adapter, 0)
 
     def replace_adapter_cache(self, from_adapter: str, to_adapter: str) -> None:
         """Replace one adapter's paged cache with a staged shadow cache."""
@@ -755,6 +771,54 @@ class FlashInferPagedKVCacheManager:
         """Free paged KV pages before foreground generation admission retry."""
 
         self.invalidate_adapter(adapter)
+
+    def release_non_current_cache_for_generation(
+        self,
+        adapter: str,
+        request: FlashInferPagedKVRequest,
+    ) -> int:
+        """Free KV pages that are not needed by the active foreground request."""
+
+        protected_spans = _coalesce_block_spans(list(request.prefix_spans))
+        protected_page_ids = {span.block_id for span in protected_spans}
+        protected_page_ids.update(span.block_id for span in request.new_spans)
+        protected_len = span_total_length(protected_spans)
+        freed_pages = 0
+
+        for other_adapter in self._block_store.adapters():
+            if other_adapter == adapter:
+                continue
+            before = self.allocated_pages
+            self.invalidate_adapter(other_adapter)
+            freed_pages += max(0, before - self.allocated_pages)
+
+        key = FULL_KEY(adapter)
+        self._prefix_cache.remove_key(key)
+        freed_pages += self._block_store.drop_adapter_except(adapter, protected_page_ids)
+
+        request.match_len = min(request.match_len, protected_len)
+        request.prefill_from = min(request.prefill_from, protected_len)
+        request.materialized_from = min(request.materialized_from, protected_len)
+        request.current_kv_len = min(request.current_kv_len, protected_len)
+        request.prefix_spans = protected_spans
+
+        if protected_len > 0:
+            protected_tokens = list(request.token_ids[:protected_len])
+            self._prefix_cache.insert_coverage(
+                protected_tokens,
+                key=key,
+                start=0,
+                spans=protected_spans,
+            )
+            self._prefix_cache.lookup(protected_tokens, keys=(key,))
+            self._max_len_by_adapter[adapter] = protected_len
+            self._latest_token_ids_by_adapter[adapter] = protected_tokens
+        else:
+            self._max_len_by_adapter.pop(adapter, None)
+            self._latest_token_ids_by_adapter.pop(adapter, None)
+
+        self._set_kvcache_bytes(adapter, self._block_store.adapter_bytes(adapter))
+        return freed_pages
 
     def ensure_adapter_cache_on_device(self, adapter: str, device: torch.device) -> None:
         """Move cached pages for ``adapter`` to ``device``."""
@@ -789,3 +853,10 @@ class FlashInferPagedKVCacheManager:
         """Return request-local token length from reserved page chunks."""
 
         return sum(sum(span.length for span in spans) for spans in request.page_span_chunks)
+
+    def _set_kvcache_bytes(self, adapter: str, num_bytes: int) -> None:
+        if self._memory_coordinator is None:
+            return
+        set_bytes = getattr(self._memory_coordinator, "set_kvcache_bytes", None)
+        if callable(set_bytes):
+            set_bytes(adapter, num_bytes)

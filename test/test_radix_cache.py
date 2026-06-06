@@ -243,6 +243,17 @@ def test_lookup_touches_hot_prefixes_along_path():
     assert (1, 2, 3, 4) in token_sets
 
 
+def test_hot_prefix_score_requires_uncached_hot_overlap():
+    cache = RadixPrefixCache()
+    key = FULL_KEY("general")
+    cache.insert_coverage([1, 2, 3, 4], key=key, start=0, spans=[KVBlockSpan(10, 0, 4)])
+    cache.lookup([1, 2, 3, 4], keys=(key,))
+
+    assert cache.score_prefix_candidate(key, [1, 2], target_len=2) > 0.0
+    assert cache.score_prefix_candidate(key, [9, 10], target_len=2) == 0.0
+    assert cache.score_prefix_candidate(key, [1, 2, 3, 4, 5], target_len=5, current_match_len=4) == 0.0
+
+
 def test_rename_key_moves_coverage_priority_and_hot_prefixes():
     cache = RadixPrefixCache()
     old_key = FULL_KEY("shadow")

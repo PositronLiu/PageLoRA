@@ -231,6 +231,36 @@ class RadixPrefixCache:
         prefixes.sort(key=lambda item: (item.score, item.target_len, item.radix_node_id), reverse=True)
         return prefixes[:limit]
 
+    def score_prefix_candidate(
+        self,
+        cache_key: str,
+        token_ids: list[int],
+        *,
+        target_len: int,
+        current_match_len: int = 0,
+        limit: int = 16,
+    ) -> float:
+        """Score a prefill candidate by overlap with already-hot prefixes."""
+
+        target_len = min(max(0, int(target_len)), len(token_ids))
+        current_match_len = min(max(0, int(current_match_len)), target_len)
+        if target_len <= 0 or current_match_len >= target_len:
+            return 0.0
+
+        candidate_tokens = tuple(token_ids[:target_len])
+        best_hot_score = 0.0
+        for hot in self.top_hot_prefixes(cache_key, limit=limit):
+            common = self._common_tuple_prefix_len(candidate_tokens, hot.token_ids)
+            if common <= current_match_len:
+                continue
+            coverage = common / target_len
+            best_hot_score = max(best_hot_score, hot.score * coverage)
+
+        if best_hot_score <= 0.0:
+            return 0.0
+        missing_tokens = target_len - current_match_len
+        return best_hot_score + min(missing_tokens, 8192) / 2048.0
+
     def insert(
         self,
         token_ids: list[int],
@@ -452,5 +482,13 @@ class RadixPrefixCache:
         while common < limit:
             if self._arena.token_at(edge, common) != token_ids[pos + common]:
                 break
+            common += 1
+        return common
+
+    @staticmethod
+    def _common_tuple_prefix_len(left: tuple[int, ...], right: tuple[int, ...]) -> int:
+        limit = min(len(left), len(right))
+        common = 0
+        while common < limit and left[common] == right[common]:
             common += 1
         return common

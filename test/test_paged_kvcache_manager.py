@@ -316,6 +316,45 @@ def test_paged_kv_invalidate_adapter_frees_pages():
     mgr.abort_request(miss)
 
 
+def test_paged_kv_release_non_current_cache_preserves_active_prefix_for_commit():
+    mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=8)
+    req = mgr.begin_request([1, 2, 3], "general")
+    k, v = _kv(3, 4)
+    mgr.append_full(0, k, v, request=req)
+    mgr.commit_request(req, [1, 2, 3])
+
+    same_adapter = mgr.begin_request([9, 10], "general")
+    same_k, same_v = _kv(2, 8)
+    mgr.append_full(0, same_k, same_v, request=same_adapter)
+    mgr.commit_request(same_adapter, [9, 10])
+
+    other_adapter = mgr.begin_request([20, 21], "coding")
+    other_k, other_v = _kv(2, 9)
+    mgr.append_full(0, other_k, other_v, request=other_adapter)
+    mgr.commit_request(other_adapter, [20, 21])
+
+    active = mgr.begin_request([1, 2, 3, 4], "general")
+    assert active.match_len == 3
+    assert active.prefill_from == 2
+    assert mgr.allocated_pages == 4
+
+    freed_pages = mgr.release_non_current_cache_for_generation("general", active)
+
+    assert freed_pages == 3
+    assert mgr.allocated_pages == 1
+    assert active.match_len == 2
+    assert active.prefill_from == 2
+    assert mgr.lookup_match_len([1, 2, 3], "general") == 2
+    assert mgr.lookup_match_len([9, 10], "general") == 0
+    assert mgr.lookup_match_len([20, 21], "coding") == 0
+
+    replay_k, replay_v = _kv(2, 10)
+    mgr.append_full(0, replay_k, replay_v, request=active)
+    mgr.commit_request(active, [1, 2, 3, 4])
+
+    assert mgr.lookup_match_len([1, 2, 3, 4], "general") == 4
+
+
 def test_paged_kv_replace_adapter_cache_moves_shadow_pages():
     mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=8)
     shadow = "__publish_shadow__:general:1"

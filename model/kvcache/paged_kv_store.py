@@ -422,6 +422,35 @@ class PagedKVBlockStore:
             self.paged_kv_cache = None
             self._dense_capacity = 0
 
+    def adapters(self) -> tuple[str, ...]:
+        """Return adapters that currently own at least one physical page."""
+
+        return tuple(self._adapter_pages)
+
+    def drop_adapter_except(self, adapter: str, protected_page_ids: set[int]) -> int:
+        """Free adapter pages except those referenced by an active request."""
+
+        protected = {int(page_id) for page_id in protected_page_ids}
+        adapter_pages = self._adapter_pages.get(adapter)
+        if not adapter_pages:
+            return 0
+
+        freed = 0
+        for page_id in list(adapter_pages):
+            if page_id in protected:
+                continue
+            page = self._pages.pop(page_id, None)
+            adapter_pages.discard(page_id)
+            self._allocator.free_page(page_id)
+            if page is not None:
+                freed += 1
+        if not adapter_pages:
+            self._adapter_pages.pop(adapter, None)
+        if not self._pages:
+            self.paged_kv_cache = None
+            self._dense_capacity = 0
+        return freed
+
     def adapter_bytes(self, adapter: str) -> int:
         page_ids = self._adapter_pages.get(adapter, ())
         if not page_ids or self.paged_kv_cache is None:
