@@ -7,7 +7,9 @@ import torch
 from model.flashinfer.cuda_graph import (
     DecodeGraphEntry,
     DecodeGraphKey,
+    FlashInferBatchDecodeCudaGraphRunner,
     FlashInferDecodeCudaGraphRunner,
+    can_use_flashinfer_cuda_graph_batch_decode,
     can_use_flashinfer_cuda_graph_decode,
     flashinfer_cuda_graph_decode_enabled,
 )
@@ -32,6 +34,7 @@ def test_cuda_graph_decode_enablement_requires_flag_and_gpu_greedy(monkeypatch):
     assert flashinfer_cuda_graph_decode_enabled(manager.config)
     assert can_use_flashinfer_cuda_graph_decode(manager, use_gpu_greedy=True, max_new_tokens=1)
     assert not can_use_flashinfer_cuda_graph_decode(manager, use_gpu_greedy=False, max_new_tokens=1)
+    assert can_use_flashinfer_cuda_graph_batch_decode(manager, max_new_tokens=1)
 
 
 def test_static_decode_append_uses_tensor_indices():
@@ -55,6 +58,42 @@ def test_static_decode_append_uses_tensor_indices():
 
     assert torch.equal(layer_cache[1, 0, 2], k_nhd[0])
     assert torch.equal(layer_cache[1, 1, 2], v_nhd[0])
+    assert layer_cache.sum().item() == k_nhd.sum().item() + v_nhd.sum().item()
+
+
+def test_static_decode_append_accepts_batched_tensor_indices():
+    layer_cache = torch.zeros(4, 2, 4, 2, 3)
+    page_id = torch.tensor([1, 3], dtype=torch.long)
+    page_offset = torch.tensor([2, 0], dtype=torch.long)
+    kv_key = torch.zeros(2, dtype=torch.long)
+    kv_value = torch.ones(2, dtype=torch.long)
+    k_nhd = torch.stack(
+        [
+            torch.full((2, 3), 3.0),
+            torch.full((2, 3), 7.0),
+        ]
+    )
+    v_nhd = torch.stack(
+        [
+            torch.full((2, 3), 5.0),
+            torch.full((2, 3), 11.0),
+        ]
+    )
+
+    _append_decode_kv_static(
+        layer_cache,
+        page_id=page_id,
+        page_offset=page_offset,
+        kv_key_index=kv_key,
+        kv_value_index=kv_value,
+        k_nhd=k_nhd,
+        v_nhd=v_nhd,
+    )
+
+    assert torch.equal(layer_cache[1, 0, 2], k_nhd[0])
+    assert torch.equal(layer_cache[1, 1, 2], v_nhd[0])
+    assert torch.equal(layer_cache[3, 0, 0], k_nhd[1])
+    assert torch.equal(layer_cache[3, 1, 0], v_nhd[1])
     assert layer_cache.sum().item() == k_nhd.sum().item() + v_nhd.sum().item()
 
 
@@ -111,6 +150,19 @@ def test_decode_graph_span_validation_requires_single_token_chunk():
     assert span([SimpleNamespace(length=2, block_id=0, start=0)]) is None
     valid = SimpleNamespace(length=1, block_id=0, start=0)
     assert span([valid]) is valid
+
+
+def test_batch_decode_graph_span_validation_requires_single_token_chunks():
+    span = FlashInferBatchDecodeCudaGraphRunner._batch_decode_spans
+
+    assert span([]) == []
+    assert span([[SimpleNamespace(length=1, block_id=0, start=0)], []]) is None
+    assert span([[SimpleNamespace(length=2, block_id=0, start=0)]]) is None
+    valid = [
+        [SimpleNamespace(length=1, block_id=0, start=0)],
+        [SimpleNamespace(length=1, block_id=1, start=3)],
+    ]
+    assert span(valid) == [valid[0][0], valid[1][0]]
 
 
 def test_decode_graph_cache_evicts_oldest_bucket(monkeypatch):

@@ -65,6 +65,75 @@ class FlashInferPageTableBuffer:
         self.paged_kv_indices = torch.empty(new_capacity, device=self.device, dtype=torch.int32)
 
 
+class FlashInferBatchPageTableBuffer:
+    """Reusable batched page-table buffers for decode planning."""
+
+    def __init__(
+        self,
+        *,
+        page_size: int,
+        device: torch.device,
+        initial_rows: int = 2,
+        initial_pages: int = 16,
+    ) -> None:
+        if page_size <= 0:
+            raise ValueError("page_size must be positive")
+        self.page_size = int(page_size)
+        self.device = device
+        row_capacity = max(1, int(initial_rows))
+        page_capacity = max(1, int(initial_pages))
+        self.paged_kv_indptr = torch.empty(row_capacity + 1, device=device, dtype=torch.int32)
+        self.paged_kv_last_page_len = torch.empty(row_capacity, device=device, dtype=torch.int32)
+        self.paged_kv_indices = torch.empty(page_capacity, device=device, dtype=torch.int32)
+
+    def update_from_batch_spans(self, batch_spans: list[list[KVBlockSpan]]) -> FlashInferPageTable:
+        """Validate spans and return a batched table backed by reusable tensors."""
+
+        indptr = [0]
+        indices: list[int] = []
+        last_page_lens: list[int] = []
+        for spans in batch_spans:
+            row_indices, last_page_len = _validate_and_collect_page_table(
+                spans,
+                page_size=self.page_size,
+            )
+            indices.extend(row_indices)
+            indptr.append(len(indices))
+            last_page_lens.append(last_page_len)
+
+        self._ensure_row_capacity(len(batch_spans))
+        self._ensure_page_capacity(len(indices))
+        self.paged_kv_indptr[: len(indptr)].copy_(
+            torch.tensor(indptr, device=self.device, dtype=torch.int32)
+        )
+        if last_page_lens:
+            self.paged_kv_last_page_len[: len(last_page_lens)].copy_(
+                torch.tensor(last_page_lens, device=self.device, dtype=torch.int32)
+            )
+        if indices:
+            self.paged_kv_indices[: len(indices)].copy_(
+                torch.tensor(indices, device=self.device, dtype=torch.int32)
+            )
+        return FlashInferPageTable(
+            paged_kv_indptr=self.paged_kv_indptr[: len(indptr)],
+            paged_kv_indices=self.paged_kv_indices[: len(indices)],
+            paged_kv_last_page_len=self.paged_kv_last_page_len[: len(last_page_lens)],
+        )
+
+    def _ensure_row_capacity(self, required_rows: int) -> None:
+        if required_rows <= self.paged_kv_last_page_len.numel():
+            return
+        new_capacity = max(required_rows, self.paged_kv_last_page_len.numel() * 2)
+        self.paged_kv_indptr = torch.empty(new_capacity + 1, device=self.device, dtype=torch.int32)
+        self.paged_kv_last_page_len = torch.empty(new_capacity, device=self.device, dtype=torch.int32)
+
+    def _ensure_page_capacity(self, required_pages: int) -> None:
+        if required_pages <= self.paged_kv_indices.numel():
+            return
+        new_capacity = max(required_pages, self.paged_kv_indices.numel() * 2)
+        self.paged_kv_indices = torch.empty(new_capacity, device=self.device, dtype=torch.int32)
+
+
 def build_flashinfer_page_table(
     spans: list[KVBlockSpan],
     *,

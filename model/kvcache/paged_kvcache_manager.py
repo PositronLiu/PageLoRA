@@ -13,6 +13,7 @@ from itertools import count
 import torch
 
 from model.kvcache.flashinfer_page_table import (
+    FlashInferBatchPageTableBuffer,
     FlashInferPageTable,
     FlashInferPageTableBuffer,
     _coalesce_block_spans,
@@ -75,6 +76,7 @@ class FlashInferPagedKVCacheManager:
         self._latest_token_ids_by_adapter: dict[str, list[int]] = {}
         self._perf_counters: dict[str, float] = {}
         self._page_table_buffer: FlashInferPageTableBuffer | None = None
+        self._batch_page_table_buffer: FlashInferBatchPageTableBuffer | None = None
 
     @property
     def paged_kv_cache(self) -> torch.Tensor | None:
@@ -644,16 +646,25 @@ class FlashInferPagedKVCacheManager:
         batch_spans: list[list[KVBlockSpan]],
         *,
         device: torch.device | None = None,
+        reuse_buffer: bool = False,
     ) -> FlashInferPageTable:
         """Build FlashInfer page-table tensors for multiple requests."""
 
         table_device = device or self._device or torch.device("cpu")
         t0 = time.perf_counter()
-        table = build_flashinfer_batch_page_table(
-            batch_spans,
-            page_size=self._page_size,
-            device=table_device,
-        )
+        if reuse_buffer:
+            if self._batch_page_table_buffer is None or self._batch_page_table_buffer.device != table_device:
+                self._batch_page_table_buffer = FlashInferBatchPageTableBuffer(
+                    page_size=self._page_size,
+                    device=table_device,
+                )
+            table = self._batch_page_table_buffer.update_from_batch_spans(batch_spans)
+        else:
+            table = build_flashinfer_batch_page_table(
+                batch_spans,
+                page_size=self._page_size,
+                device=table_device,
+            )
         self._perf_add("manager_build_batch_page_table_s", time.perf_counter() - t0)
         self._perf_add("manager_build_batch_page_table_calls", 1.0)
         self._perf_add("manager_build_batch_page_table_rows", float(len(batch_spans)))
@@ -668,6 +679,18 @@ class FlashInferPagedKVCacheManager:
         """Return reusable decode page-table buffer pointers for graph keys."""
 
         buffer = self._page_table_buffer
+        if buffer is None:
+            return (0, 0, 0)
+        return (
+            int(buffer.paged_kv_indptr.data_ptr()),
+            int(buffer.paged_kv_indices.data_ptr()),
+            int(buffer.paged_kv_last_page_len.data_ptr()),
+        )
+
+    def batch_page_table_buffer_signature(self) -> tuple[int, int, int]:
+        """Return reusable batched decode page-table buffer pointers for graph keys."""
+
+        buffer = self._batch_page_table_buffer
         if buffer is None:
             return (0, 0, 0)
         return (

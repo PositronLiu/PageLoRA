@@ -427,3 +427,46 @@ def test_flashinfer_page_table_buffer_reuses_tensors():
     assert second.paged_kv_indptr.tolist() == [0, 2]
     assert second.paged_kv_indices.tolist() == [11, 12]
     assert second.paged_kv_last_page_len.tolist() == [1]
+
+
+def test_flashinfer_batch_page_table_buffer_reuses_tensors():
+    manager = FlashInferPagedKVCacheManager(
+        1,
+        page_size=4,
+        max_pages=0,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    assert manager.batch_page_table_buffer_signature() == (0, 0, 0)
+    first = manager.build_batch_page_table(
+        [
+            [KVBlockSpan(block_id=2, start=0, length=3)],
+            [KVBlockSpan(block_id=4, start=0, length=4)],
+        ],
+        device=torch.device("cpu"),
+        reuse_buffer=True,
+    )
+    first_signature = manager.batch_page_table_buffer_signature()
+
+    second = manager.build_batch_page_table(
+        [
+            [KVBlockSpan(block_id=2, start=0, length=4)],
+            [
+                KVBlockSpan(block_id=4, start=0, length=4),
+                KVBlockSpan(block_id=5, start=0, length=1),
+            ],
+        ],
+        device=torch.device("cpu"),
+        reuse_buffer=True,
+    )
+
+    assert first_signature == (
+        first.paged_kv_indptr.data_ptr(),
+        first.paged_kv_indices.data_ptr(),
+        first.paged_kv_last_page_len.data_ptr(),
+    )
+    assert manager.batch_page_table_buffer_signature() == first_signature
+    assert second.paged_kv_indptr.tolist() == [0, 1, 3]
+    assert second.paged_kv_indices.tolist() == [2, 4, 5]
+    assert second.paged_kv_last_page_len.tolist() == [4, 1]

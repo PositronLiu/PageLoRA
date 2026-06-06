@@ -17,7 +17,9 @@ from core.utils import LOG
 from multilora.runtime import AdapterRole
 from model.flashinfer.attention_backend import FlashInferAttentionBackend
 from model.flashinfer.cuda_graph import (
+    FlashInferBatchDecodeCudaGraphRunner,
     FlashInferDecodeCudaGraphRunner,
+    can_use_flashinfer_cuda_graph_batch_decode,
     can_use_flashinfer_cuda_graph_decode,
 )
 from model.flashinfer.layer_runner import _run_flashinfer_attention
@@ -30,6 +32,7 @@ from model.kvcache.flashinfer_page_table import FlashInferPageTable
 from model.kvcache.page_admission import admit_paged_kv_request
 from model.kvcache.paged_kvcache_manager import FlashInferPagedKVCacheManager
 from model.kvcache.paged_kvcache_request import FlashInferPagedKVRequest
+from model.kvcache.radix_types import KVBlockSpan
 
 if TYPE_CHECKING:
     from model.generation import BatchGenerationOutput
@@ -147,6 +150,7 @@ def _get_backend(manager: "ModelManager") -> FlashInferAttentionBackend:
     backend = _make_backend(manager)
     setattr(manager, "_flashinfer_backend_entry", (key, backend))
     setattr(manager, "_flashinfer_decode_graph_runner", None)
+    setattr(manager, "_flashinfer_batch_decode_graph_runner", None)
     return backend
 
 
@@ -162,6 +166,21 @@ def _get_decode_graph_runner(
         return runner
     runner = FlashInferDecodeCudaGraphRunner(manager, backend, cache_mgr)
     setattr(manager, "_flashinfer_decode_graph_runner", runner)
+    return runner
+
+
+def _get_batch_decode_graph_runner(
+    manager: "ModelManager",
+    backend: FlashInferAttentionBackend,
+    cache_mgr: FlashInferPagedKVCacheManager,
+) -> FlashInferBatchDecodeCudaGraphRunner:
+    """Return a persistent batched decode CUDA graph runner."""
+
+    runner = getattr(manager, "_flashinfer_batch_decode_graph_runner", None)
+    if isinstance(runner, FlashInferBatchDecodeCudaGraphRunner) and runner.is_compatible(backend, cache_mgr):
+        return runner
+    runner = FlashInferBatchDecodeCudaGraphRunner(manager, backend, cache_mgr)
+    setattr(manager, "_flashinfer_batch_decode_graph_runner", runner)
     return runner
 
 
@@ -197,6 +216,7 @@ def _plan_decode_batch(
     *,
     device: torch.device,
     dtype: torch.dtype,
+    reuse_buffer: bool = False,
 ) -> FlashInferPageTable:
     """Build batched page metadata and plan one FlashInfer decode step."""
 
@@ -206,6 +226,7 @@ def _plan_decode_batch(
             for request_cache in request_caches
         ],
         device=device,
+        reuse_buffer=reuse_buffer,
     )
     backend.plan_decode(
         paged_kv_indptr=page_table.paged_kv_indptr,
@@ -359,6 +380,8 @@ def _run_flashinfer_decode_batch(
     request_caches: list[FlashInferPagedKVRequest],
     backend: FlashInferAttentionBackend,
     perf: FlashInferPerfTrace | None = None,
+    reserve_chunks: bool = True,
+    plan_decode: bool = True,
 ) -> torch.Tensor:
     """Run one batched FlashInfer decode step for active requests."""
 
@@ -375,22 +398,24 @@ def _run_flashinfer_decode_batch(
     if perf is not None:
         perf.add("decode_embed_s", embed_t0)
 
-    reserve_t0 = perf.tic() if perf is not None else time.perf_counter()
-    for request_cache in request_caches:
-        manager.kvcache_manager.reserve_chunk(request_cache, 1)
-    if perf is not None:
-        perf.add("decode_reserve_s", reserve_t0)
+    if reserve_chunks:
+        reserve_t0 = perf.tic() if perf is not None else time.perf_counter()
+        for request_cache in request_caches:
+            manager.kvcache_manager.reserve_chunk(request_cache, 1)
+        if perf is not None:
+            perf.add("decode_reserve_s", reserve_t0)
 
-    plan_t0 = perf.tic() if perf is not None else time.perf_counter()
-    _plan_decode_batch(
-        backend,
-        manager.kvcache_manager,
-        request_caches,
-        device=device,
-        dtype=hidden.dtype,
-    )
-    if perf is not None:
-        perf.add("decode_plan_s", plan_t0)
+    if plan_decode:
+        plan_t0 = perf.tic() if perf is not None else time.perf_counter()
+        _plan_decode_batch(
+            backend,
+            manager.kvcache_manager,
+            request_caches,
+            device=device,
+            dtype=hidden.dtype,
+        )
+        if perf is not None:
+            perf.add("decode_plan_s", plan_t0)
 
     layers_t0 = perf.tic() if perf is not None else time.perf_counter()
     token_lengths = [1] * len(token_ids)
@@ -908,6 +933,13 @@ def generate_batch_with_flashinfer_kvcache(
         token_histories = [list(prompt_ids) for prompt_ids in batch_prompt_ids]
         current_positions = [len(prompt_ids) for prompt_ids in batch_prompt_ids]
         active_indices = list(range(len(batch_prompt_ids)))
+        decode_graph: FlashInferBatchDecodeCudaGraphRunner | None = None
+        if can_use_flashinfer_cuda_graph_batch_decode(
+            manager,
+            max_new_tokens=max_new_tokens,
+        ):
+            decode_graph = _get_batch_decode_graph_runner(manager, backend, cache_mgr)
+            LOG(f"FlashInfer batch CUDA graph decode enabled cached={decode_graph.graph_count}")
         t0 = time.perf_counter()
         decode_t0 = perf.tic()
 
@@ -949,6 +981,61 @@ def generate_batch_with_flashinfer_kvcache(
                 active_indices = []
                 break
 
+            graph_reserved_spans: list[list[KVBlockSpan]] | None = None
+            graph_chunk_indices: list[int] | None = None
+            if decode_graph is not None:
+                reserve_t0 = perf.tic()
+                graph_reserved_spans = []
+                graph_chunk_indices = []
+                for request_cache in continuing_requests:
+                    graph_chunk_indices.append(len(request_cache.page_span_chunks))
+                    graph_reserved_spans.append(cache_mgr.reserve_chunk(request_cache, 1))
+                perf.add("decode_reserve_s", reserve_t0)
+
+                plan_t0 = perf.tic()
+                page_table = _plan_decode_batch(
+                    backend,
+                    cache_mgr,
+                    continuing_requests,
+                    device=device,
+                    dtype=model.get_input_embeddings().weight.dtype,
+                    reuse_buffer=True,
+                )
+                perf.add("decode_plan_s", plan_t0)
+
+                graph_t0 = perf.tic()
+                graph_logits = decode_graph.run(
+                    token_ids=continuing_tokens,
+                    positions=continuing_positions,
+                    chunk_spans_batch=graph_reserved_spans,
+                    page_table_pages=page_table.paged_kv_indices.numel(),
+                )
+                perf.add("decode_cuda_graph_s", graph_t0)
+                if graph_logits is not None:
+                    for request_cache, chunk_index in zip(continuing_requests, graph_chunk_indices, strict=True):
+                        cache_mgr.mark_graph_decode_chunk_written(
+                            request_cache,
+                            chunk_index=chunk_index,
+                            num_layers=len(manager.lora_runtime.layers),
+                            device=device,
+                        )
+                    for active_index, token_id in zip(continuing_indices, continuing_tokens, strict=True):
+                        cached_generated_ids_batch[active_index].append(token_id)
+                        current_positions[active_index] += 1
+                    logits = graph_logits
+                    active_indices = continuing_indices
+                    perf.log_decode_progress(
+                        generated_tokens=sum(len(ids) for ids in generated_ids_batch),
+                        cached_tokens=sum(len(ids) for ids in cached_generated_ids_batch),
+                        current_pos=max(current_positions, default=0),
+                        started=t0,
+                        cache_snapshot=cache_mgr.perf_snapshot(),
+                    )
+                    continue
+                if decode_graph.disabled_reason is not None:
+                    LOG(f"FlashInfer batch CUDA graph decode fallback: {decode_graph.disabled_reason}")
+                    decode_graph = None
+
             hidden = _run_flashinfer_decode_batch(
                 manager,
                 continuing_tokens,
@@ -956,6 +1043,8 @@ def generate_batch_with_flashinfer_kvcache(
                 request_caches=continuing_requests,
                 backend=backend,
                 perf=perf,
+                reserve_chunks=graph_reserved_spans is None,
+                plan_decode=graph_reserved_spans is None,
             )
             for active_index, token_id in zip(continuing_indices, continuing_tokens, strict=True):
                 cached_generated_ids_batch[active_index].append(token_id)
