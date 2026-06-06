@@ -16,6 +16,7 @@ from model.kvcache.flashinfer_page_table import (
     FlashInferPageTable,
     FlashInferPageTableBuffer,
     _coalesce_block_spans,
+    build_flashinfer_batch_page_table,
     build_flashinfer_page_table,
 )
 from model.kvcache.paged_kv_store import PagedKVBlockStore
@@ -69,6 +70,7 @@ class FlashInferPagedKVCacheManager:
         )
         self._request_ids = count(1)
         self._active_request: FlashInferPagedKVRequest | None = None
+        self._active_batch_requests: list[FlashInferPagedKVRequest] | None = None
         self._max_len_by_adapter: dict[str, int] = {}
         self._latest_token_ids_by_adapter: dict[str, list[int]] = {}
         self._perf_counters: dict[str, float] = {}
@@ -264,10 +266,46 @@ class FlashInferPagedKVCacheManager:
     ) -> FlashInferPagedKVRequest:
         """Open a paged full-KV cache request for one foreground generation."""
 
-        if self._active_request is not None:
+        if self._active_request is not None or self._active_batch_requests is not None:
             raise RuntimeError("KV cache request already active")
 
         total_t0 = time.perf_counter()
+        request = self._begin_request_unchecked(token_ids, adapter_name)
+        self._active_request = request
+        self._perf_add("manager_begin_request_s", time.perf_counter() - total_t0)
+        self._perf_add("manager_begin_request_calls", 1.0)
+        return request
+
+    def begin_batch_requests(
+        self,
+        batch_token_ids: list[list[int]],
+        adapter_name: str,
+    ) -> list[FlashInferPagedKVRequest]:
+        """Open multiple foreground requests for one FlashInfer batch."""
+
+        if self._active_request is not None or self._active_batch_requests is not None:
+            raise RuntimeError("KV cache request already active")
+        if not batch_token_ids:
+            return []
+
+        total_t0 = time.perf_counter()
+        requests = [
+            self._begin_request_unchecked(token_ids, adapter_name)
+            for token_ids in batch_token_ids
+        ]
+        self._active_batch_requests = requests
+        self._perf_add("manager_begin_batch_request_s", time.perf_counter() - total_t0)
+        self._perf_add("manager_begin_batch_request_calls", 1.0)
+        self._perf_add("manager_begin_batch_size", float(len(requests)))
+        return requests
+
+    def _begin_request_unchecked(
+        self,
+        token_ids: list[int],
+        adapter_name: str,
+    ) -> FlashInferPagedKVRequest:
+        """Build request state without changing the active-request guard."""
+
         key = FULL_KEY(adapter_name)
         lookup_t0 = time.perf_counter()
         match = self._prefix_cache.lookup(token_ids, keys=(key,))
@@ -304,9 +342,6 @@ class FlashInferPagedKVCacheManager:
             prefix_spans=prefix_spans,
             current_kv_len=prefill_from,
         )
-        self._active_request = request
-        self._perf_add("manager_begin_request_s", time.perf_counter() - total_t0)
-        self._perf_add("manager_begin_request_calls", 1.0)
         self._perf_add("manager_begin_prompt_tokens", float(prompt_len))
         self._perf_add("manager_begin_match_len", float(match_len))
         self._perf_add("manager_begin_prefill_from", float(prefill_from))
@@ -326,7 +361,7 @@ class FlashInferPagedKVCacheManager:
         instead of replaying the final token, because no logits are needed.
         """
 
-        if self._active_request is not None:
+        if self._active_request is not None or self._active_batch_requests is not None:
             raise RuntimeError("KV cache request already active")
 
         target_len = min(max(0, target_len), len(token_ids))
@@ -383,8 +418,35 @@ class FlashInferPagedKVCacheManager:
     ) -> None:
         """Commit materialized KV chunks into pages and radix coverage."""
 
-        if self._active_request is not request:  # protection
+        if self._active_request is not request or self._active_batch_requests is not None:  # protection
             raise RuntimeError("cannot commit inactive KV cache request")
+
+        self._commit_request_unchecked(request, final_token_ids)
+        self._active_request = None
+
+    def commit_batch_requests(
+        self,
+        requests: list[FlashInferPagedKVRequest],
+        final_token_ids_batch: list[list[int]],
+    ) -> None:
+        """Commit all requests from the currently active FlashInfer batch."""
+
+        if self._active_request is not None or self._active_batch_requests is not requests:
+            raise RuntimeError("cannot commit inactive KV cache batch")
+        if len(requests) != len(final_token_ids_batch):
+            raise ValueError("request and final-token batch sizes differ")
+        try:
+            for request, final_token_ids in zip(requests, final_token_ids_batch, strict=True):
+                self._commit_request_unchecked(request, final_token_ids)
+        finally:
+            self._active_batch_requests = None
+
+    def _commit_request_unchecked(
+        self,
+        request: FlashInferPagedKVRequest,
+        final_token_ids: list[int],
+    ) -> None:
+        """Commit one request without checking or clearing the active guard."""
 
         total_t0 = time.perf_counter()
         final_len = len(final_token_ids)
@@ -429,7 +491,6 @@ class FlashInferPagedKVCacheManager:
             cached_len,
         )
         self._latest_token_ids_by_adapter[request.adapter_name] = list(final_token_ids)
-        self._active_request = None
         self._perf_add("manager_commit_request_s", time.perf_counter() - total_t0)
         self._perf_add("manager_commit_request_calls", 1.0)
         self._perf_add("manager_commit_final_len", float(final_len))
@@ -450,6 +511,16 @@ class FlashInferPagedKVCacheManager:
             self._block_store.drop_spans(request.new_spans)
             request.new_spans = []
             self._active_request = None
+
+    def abort_batch_requests(self, requests: list[FlashInferPagedKVRequest]) -> None:
+        """Close an active batch without committing request-local chunks."""
+
+        if self._active_batch_requests is not requests:
+            return
+        for request in requests:
+            self._block_store.drop_spans(request.new_spans)
+            request.new_spans = []
+        self._active_batch_requests = None
 
     def append_full(
         self,
@@ -566,6 +637,31 @@ class FlashInferPagedKVCacheManager:
         self._perf_add("manager_build_page_table_calls", 1.0)
         self._perf_add("manager_build_page_table_input_spans", float(len(spans)))
         self._perf_add("manager_build_page_table_pages", float(table.paged_kv_indices.numel()))
+        return table
+
+    def build_batch_page_table(
+        self,
+        batch_spans: list[list[KVBlockSpan]],
+        *,
+        device: torch.device | None = None,
+    ) -> FlashInferPageTable:
+        """Build FlashInfer page-table tensors for multiple requests."""
+
+        table_device = device or self._device or torch.device("cpu")
+        t0 = time.perf_counter()
+        table = build_flashinfer_batch_page_table(
+            batch_spans,
+            page_size=self._page_size,
+            device=table_device,
+        )
+        self._perf_add("manager_build_batch_page_table_s", time.perf_counter() - t0)
+        self._perf_add("manager_build_batch_page_table_calls", 1.0)
+        self._perf_add("manager_build_batch_page_table_rows", float(len(batch_spans)))
+        self._perf_add(
+            "manager_build_batch_page_table_input_spans",
+            float(sum(len(spans) for spans in batch_spans)),
+        )
+        self._perf_add("manager_build_batch_page_table_pages", float(table.paged_kv_indices.numel()))
         return table
 
     def page_table_buffer_signature(self) -> tuple[int, int, int]:

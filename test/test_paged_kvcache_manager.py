@@ -9,7 +9,10 @@ from model.kvcache.paged_kvcache_manager import (
     FlashInferPagedKVCacheManager,
     build_flashinfer_page_table,
 )
-from model.kvcache.flashinfer_page_table import FlashInferPageTableBuffer
+from model.kvcache.flashinfer_page_table import (
+    FlashInferPageTableBuffer,
+    build_flashinfer_batch_page_table,
+)
 from model.kvcache.radix_cache import KVBlockSpan
 
 
@@ -47,6 +50,25 @@ def test_paged_kv_cache_reuses_same_adapter_prefix():
     assert torch.equal(_cache_k_tokens(layer_cache, span.block_id, span.length), k[:, :, :2, :])
     assert torch.equal(_cache_v_tokens(layer_cache, span.block_id, span.length), v[:, :, :2, :])
     mgr.abort_request(hit)
+
+
+def test_paged_kv_cache_batch_request_lifecycle_blocks_single_request():
+    mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=8)
+    requests = mgr.begin_batch_requests([[1, 2], [3, 4, 5]], "general")
+
+    assert len(requests) == 2
+    with pytest.raises(RuntimeError):
+        mgr.begin_request([9], "general")
+
+    mgr.reserve_chunk(requests[0], 2)
+    mgr.reserve_chunk(requests[1], 3)
+    assert mgr.allocated_pages == 3
+
+    mgr.abort_batch_requests(requests)
+    assert mgr.allocated_pages == 0
+
+    request = mgr.begin_request([9], "general")
+    mgr.abort_request(request)
 
 
 def test_paged_kv_syncs_kvcache_bytes_and_release_for_train():
@@ -346,6 +368,26 @@ def test_flashinfer_page_table_accepts_aligned_spans():
     assert table.paged_kv_indptr.tolist() == [0, 2]
     assert table.paged_kv_indices.tolist() == [11, 12]
     assert table.paged_kv_last_page_len.tolist() == [1]
+
+
+def test_flashinfer_batch_page_table_accepts_aligned_rows():
+    table = build_flashinfer_batch_page_table(
+        [
+            [
+                KVBlockSpan(block_id=11, start=0, length=2),
+                KVBlockSpan(block_id=12, start=0, length=1),
+            ],
+            [
+                KVBlockSpan(block_id=21, start=0, length=2),
+            ],
+        ],
+        page_size=2,
+        device=torch.device("cpu"),
+    )
+
+    assert table.paged_kv_indptr.tolist() == [0, 2, 3]
+    assert table.paged_kv_indices.tolist() == [11, 12, 21]
+    assert table.paged_kv_last_page_len.tolist() == [1, 2]
 
 
 def test_flashinfer_page_table_rejects_unaligned_spans():

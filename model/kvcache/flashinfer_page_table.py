@@ -1,4 +1,4 @@
-"""FlashInfer page-table construction for single-request paged KV."""
+"""FlashInfer page-table construction for paged KV."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from model.kvcache.radix_types import KVBlockSpan
 
 @dataclass(frozen=True)
 class FlashInferPageTable:
-    """Single-request page-table tensors for FlashInfer paged KV wrappers."""
+    """Page-table tensors for FlashInfer paged KV wrappers."""
 
     paged_kv_indptr: torch.Tensor
     paged_kv_indices: torch.Tensor
@@ -84,6 +84,30 @@ def build_flashinfer_page_table(
         paged_kv_indptr=torch.tensor([0, len(indices)], device=device, dtype=torch.int32),
         paged_kv_indices=torch.tensor(indices, device=device, dtype=torch.int32),
         paged_kv_last_page_len=torch.tensor([last_page_len], device=device, dtype=torch.int32),
+    )
+
+
+def build_flashinfer_batch_page_table(
+    batch_spans: list[list[KVBlockSpan]],
+    *,
+    page_size: int,
+    device: torch.device,
+) -> FlashInferPageTable:
+    """Build a batched FlashInfer page table from per-request page spans."""
+
+    indptr = [0]
+    indices: list[int] = []
+    last_page_lens: list[int] = []
+    for spans in batch_spans:
+        row_indices, last_page_len = _validate_and_collect_page_table(spans, page_size=page_size)
+        indices.extend(row_indices)
+        indptr.append(len(indices))
+        last_page_lens.append(last_page_len)
+
+    return FlashInferPageTable(
+        paged_kv_indptr=torch.tensor(indptr, device=device, dtype=torch.int32),
+        paged_kv_indices=torch.tensor(indices, device=device, dtype=torch.int32),
+        paged_kv_last_page_len=torch.tensor(last_page_lens, device=device, dtype=torch.int32),
     )
 
 
