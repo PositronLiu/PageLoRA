@@ -31,6 +31,7 @@ from model.kvcache.paged_kvcache_manager import FlashInferPagedKVCacheManager
 from model.kvcache.paged_kvcache_request import FlashInferPagedKVRequest
 
 if TYPE_CHECKING:
+    from model.generation import BatchGenerationOutput
     from model.generation import GenerationOutput
     from model.model_manager import ModelManager
 
@@ -536,6 +537,58 @@ def generate_with_flashinfer_kvcache(
     finally:
         if not committed:
             cache_mgr.abort_request(request_cache)
+
+
+def generate_batch_with_flashinfer_kvcache(
+    manager: "ModelManager",
+    batch_prompt_ids: list[list[int]],
+    *,
+    adapter_name: str,
+    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+    temperature: float = DEFAULT_TEMPERATURE,
+    top_p: float = DEFAULT_TOP_P,
+    top_k: int = DEFAULT_TOP_K,
+    repetition_penalty: float = 1.05,
+    max_time: float | None = None,
+) -> "BatchGenerationOutput":
+    """Run the public batch-generate API through the FlashInfer path.
+
+    The current paged-KV cache manager owns a single active request at a time,
+    so this preserves batch API semantics by executing each row through the
+    existing FlashInfer request loop and returning results in input order.
+    """
+
+    from model.generation import BatchGenerationOutput
+
+    if not batch_prompt_ids:
+        return BatchGenerationOutput(response_texts=[], response_ids=[])
+
+    response_texts: list[str] = []
+    response_ids_batch: list[list[int]] = []
+    for index, prompt_ids in enumerate(batch_prompt_ids):
+        if not prompt_ids:
+            raise ValueError(f"batch_prompt_ids[{index}] must not be empty")
+        output = generate_with_flashinfer_kvcache(
+            manager,
+            prompt_ids,
+            adapter_name=adapter_name,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            repetition_penalty=repetition_penalty,
+            max_time=max_time,
+            ignore_eos=False,
+            sampling_mode="project_default",
+            compute_logprobs=False,
+        )
+        response_texts.append(output.response_text)
+        response_ids_batch.append(output.response_ids)
+
+    return BatchGenerationOutput(
+        response_texts=response_texts,
+        response_ids=response_ids_batch,
+    )
 
 
 def prefill_flashinfer_paged_kv_chunk(
