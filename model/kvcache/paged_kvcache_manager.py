@@ -453,24 +453,43 @@ class FlashInferPagedKVCacheManager:
         total_t0 = time.perf_counter()
         final_len = len(final_token_ids)
         start = min(request.match_len, final_len)
-        skip = max(0, start - request.materialized_from)
-        # append_full writes request-local chunks into pages immediately.
-        # Commit only inserts the non-prefix suffix into radix metadata.
         coalesce_t0 = time.perf_counter()
-        commit_len = max(0, final_len - start)
-        commit_spans = _coalesce_block_spans(
-            slice_block_spans(request.new_spans, skip, commit_len)
-        )
+        if request.materialized_from < start:
+            # The radix cache may report a longer match than FlashInfer can
+            # consume through its page table. In that replay case, replace the
+            # adapter's coverage with the request-local hot path so future
+            # lookups see consecutive full pages from offset zero.
+            start = 0
+            prefix_len = min(request.materialized_from, final_len)
+            new_len = max(0, final_len - prefix_len)
+            commit_spans = _coalesce_block_spans(
+                slice_block_spans(request.prefix_spans, 0, prefix_len)
+                + slice_block_spans(request.new_spans, 0, new_len)
+            )
+            replace_adapter_coverage = True
+        else:
+            skip = max(0, start - request.materialized_from)
+            # append_full writes request-local chunks into pages immediately.
+            # Commit only inserts the non-prefix suffix into radix metadata.
+            commit_len = max(0, final_len - start)
+            commit_spans = _coalesce_block_spans(
+                slice_block_spans(request.new_spans, skip, commit_len)
+            )
+            replace_adapter_coverage = False
         self._perf_add("manager_commit_coalesce_s", time.perf_counter() - coalesce_t0)
         if commit_spans:
+            protected_page_ids = {span.block_id for span in commit_spans}
             try:
                 # Radix coverage insertion is kept separate from page writes so
                 # the tree remains backend-neutral. Roll back pages if insertion
                 # detects non-contiguous coverage.
+                key = FULL_KEY(request.adapter_name)
+                if replace_adapter_coverage:
+                    self._prefix_cache.remove_key(key, remove_priority=False)
                 insert_t0 = time.perf_counter()
                 self._prefix_cache.insert_coverage(
                     final_token_ids,
-                    key=FULL_KEY(request.adapter_name),
+                    key=key,
                     start=start,
                     spans=commit_spans,
                 )
@@ -480,6 +499,8 @@ class FlashInferPagedKVCacheManager:
                 self._block_store.drop_spans(request.new_spans)
                 request.new_spans = []
                 raise
+            if replace_adapter_coverage:
+                self._block_store.drop_adapter_except(request.adapter_name, protected_page_ids)
         if request.new_spans:
             committed_page_ids = {span.block_id for span in commit_spans}
             uncommitted_spans = [
@@ -609,6 +630,27 @@ class FlashInferPagedKVCacheManager:
         key = FULL_KEY(adapter_name)
         match = self._prefix_cache.lookup(token_ids, keys=(key,))
         return min(len(token_ids), match.key_match_len.get(key, 0))
+
+    def lookup_usable_prefix_len(
+        self,
+        token_ids: list[int],
+        adapter_name: str,
+        *,
+        target_len: int | None = None,
+    ) -> int:
+        """Return the FlashInfer page-table-compatible cached prefix length."""
+
+        prefix_len = min(len(token_ids), target_len if target_len is not None else len(token_ids))
+        if prefix_len <= 0:
+            return 0
+        prefix_ids = list(token_ids[:prefix_len])
+        key = FULL_KEY(adapter_name)
+        match = self._prefix_cache.lookup(prefix_ids, keys=(key,))
+        match_len = min(prefix_len, match.key_match_len.get(key, 0))
+        return self._flashinfer_usable_prefix_len(
+            match.key_spans.get(key, []),
+            desired_len=match_len,
+        )
 
     def top_hot_prefixes(self, adapter_name: str, limit: int) -> list[RadixHotPrefix]:
         """Return hottest full-KV prefixes for one adapter."""

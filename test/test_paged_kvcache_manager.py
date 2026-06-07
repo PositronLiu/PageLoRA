@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 import torch
 
@@ -158,6 +160,34 @@ def test_paged_kv_commit_preserves_suffix_after_aligned_replay():
     mgr.abort_request(hit)
 
 
+def test_paged_kv_prefill_commit_replaces_unusable_partial_prefix():
+    mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2, max_pages=8)
+    seed = mgr.begin_request([1], "general")
+    k, v = _kv(1, 1)
+    mgr.append_full(0, k, v, request=seed)
+    mgr.commit_request(seed, [1])
+
+    assert mgr.lookup_match_len([1, 2, 3, 4], "general") == 1
+    assert mgr.lookup_usable_prefix_len([1, 2, 3, 4], "general", target_len=4) == 0
+    assert mgr.allocated_pages == 1
+
+    prefill = mgr.begin_preprefill_request([1, 2, 3, 4], "general", target_len=4)
+    assert prefill is not None
+    assert prefill.match_len == 1
+    assert prefill.prefill_from == 0
+    replay_k, replay_v = _kv(4, 9)
+    mgr.append_full(0, replay_k, replay_v, request=prefill)
+    mgr.commit_request(prefill, [1, 2, 3, 4])
+
+    assert mgr.lookup_match_len([1, 2, 3, 4], "general") == 4
+    assert mgr.lookup_usable_prefix_len([1, 2, 3, 4], "general", target_len=4) == 4
+    hit = mgr.begin_request([1, 2, 3, 4, 5], "general")
+    assert hit.match_len == 4
+    assert hit.prefill_from == 4
+    mgr.abort_request(hit)
+    assert mgr.allocated_pages == 2
+
+
 def test_paged_kv_cache_is_adapter_specific():
     mgr = FlashInferPagedKVCacheManager(num_layers=1, page_size=2)
     req = mgr.begin_request([1, 2, 3], "general")
@@ -243,6 +273,8 @@ def test_paged_kv_append_full_nhd_batches_consecutive_pages():
 def test_paged_kv_flashinfer_append_matches_manual_layout():
     if not torch.cuda.is_available():
         pytest.skip("flashinfer append test requires CUDA")
+    if shutil.which("ninja") is None:
+        pytest.skip("flashinfer JIT append test requires ninja")
 
     try:
         import flashinfer.page  # noqa: F401

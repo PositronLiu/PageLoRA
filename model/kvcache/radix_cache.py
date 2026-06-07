@@ -64,11 +64,12 @@ class RadixPrefixCache:
     def node_count(self) -> int:
         return len(self._nodes)
 
-    def remove_key(self, key: str) -> None:
+    def remove_key(self, key: str, *, remove_priority: bool = True) -> None:
         for node in self._nodes.values():
             node.spans_by_key.pop(key, None)
-        self.priority_index.remove_cache_key(key)
-        self._remove_hot_cache_key(key)
+        if remove_priority:
+            self.priority_index.remove_cache_key(key)
+            self._remove_hot_cache_key(key)
 
     def rename_key(self, old_key: str, new_key: str) -> None:
         """Rename one cache-key namespace across radix coverage and metadata."""
