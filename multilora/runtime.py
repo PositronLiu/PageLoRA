@@ -442,6 +442,40 @@ class LoRARuntime:
             self.ensure_adapter_on_gpu(shadow_name, self._device)
         self._clear_flashinfer_effective_weight_caches()
 
+    def publish_shadow_to_serve(
+        self,
+        adapter_name: str,
+        shadow_name: str,
+        *,
+        clear_train: bool = True,
+    ) -> None:
+        """Publish a staged shadow adapter snapshot into its public serve adapter."""
+
+        if adapter_name not in self._serve_registry:
+            raise KeyError(f"Unknown logical adapter: {adapter_name}")
+        if shadow_name not in self._serve_registry:
+            raise KeyError(f"Unknown staged adapter: {shadow_name}")
+        if shadow_name not in self._internal_adapter_names:
+            raise RuntimeError(f"staged adapter is not internal: {shadow_name}")
+
+        if self._merged_lora_adapter_name is not None:
+            self._unmerge_active_serve_lora()
+
+        target_layers = self._serve_registry[adapter_name]
+        shadow_layers = self._serve_registry[shadow_name]
+        with torch.no_grad():
+            for key, target in target_layers.items():
+                source = shadow_layers[key]
+                target.a.data.copy_(source.a.data.to(device=target.a.device, dtype=target.a.dtype))
+                target.b.data.copy_(source.b.data.to(device=target.b.device, dtype=target.b.dtype))
+
+        self._clear_flashinfer_effective_weight_caches()
+        self._bump_adapter_version(adapter_name)
+        if clear_train and self.current_train_owner == adapter_name:
+            self.clear_train_workspace()
+        elif self.active_role == AdapterRole.SERVE.value and self.active_logical_adapter_name == adapter_name:
+            self._broadcast_active()
+
     def drop_shadow_adapter(self, shadow_name: str) -> None:
         """Drop an internal publish shadow adapter."""
 

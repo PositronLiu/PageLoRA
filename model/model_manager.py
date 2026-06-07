@@ -379,7 +379,7 @@ class ModelManager:
     def publish_staged_adapter(self, adapter_name: str, shadow_name: str) -> None:
         """Publish staged train weights and adopt staged KV cache, if available."""
 
-        self.lora_runtime.commit_train_to_serve(adapter_name, clear_train=True)
+        self.lora_runtime.publish_shadow_to_serve(adapter_name, shadow_name)
         if self._kvcache_manager is not None:
             replace_cache = getattr(self._kvcache_manager, "replace_adapter_cache", None)
             if callable(replace_cache):
