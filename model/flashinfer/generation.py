@@ -583,6 +583,7 @@ def generate_with_flashinfer_kvcache(
         raise RuntimeError("FlashInferPagedKVCacheManager not initialized")
 
     cache_mgr.reset_perf_counters()
+    generation_wall_t0 = time.perf_counter()
     perf = FlashInferPerfTrace(device)
     generation_t0 = perf.tic()
     backend_t0 = perf.tic()
@@ -651,6 +652,7 @@ def generate_with_flashinfer_kvcache(
         decode_position_ids = torch.empty((1, 1), device=device, dtype=torch.long)
         t0 = time.perf_counter()
         decode_t0 = perf.tic()
+        first_token_s: float | None = None
 
         for _step in range(max_new_tokens):
             if max_time is not None and time.perf_counter() - t0 >= max_time:
@@ -676,6 +678,10 @@ def generate_with_flashinfer_kvcache(
                 token_id = next_tokens[0]
                 token_tensor = None
             perf.add("decode_sample_s", sample_t0)
+            if first_token_s is None:
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                first_token_s = time.perf_counter() - generation_wall_t0
 
             token_id: int | None
             if use_gpu_greedy:
@@ -840,6 +846,8 @@ def generate_with_flashinfer_kvcache(
                 "total_s": total_s,
                 "prefill_s": prefill_s,
                 "decode_s": decode_s,
+                "first_token_s": first_token_s or 0.0,
+                "ttft_s": first_token_s or 0.0,
                 "cache_match_tokens": request_cache.match_len,
             },
         )
