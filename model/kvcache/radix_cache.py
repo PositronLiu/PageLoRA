@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from model.cache_priority import CachePrioritySignals, cache_priority, prefill_overlap_priority
 from model.kvcache.radix_priority import RadixPriorityEntry, RadixPriorityIndex
 from model.kvcache.radix_storage import TokenArena, slice_block_spans, span_total_length, split_block_spans
 from model.kvcache.radix_types import (
@@ -216,8 +217,15 @@ class RadixPrefixCache:
                 continue
             if not token_ids:
                 continue
-            recency_bonus = stats.last_access_count * 1e-6
-            score = stats.touch_count * 10.0 + min(stats.target_len, 8192) / 1024.0 + recency_bonus
+            score = cache_priority(
+                CachePrioritySignals(
+                    touch_count=stats.touch_count,
+                    last_access_count=stats.last_access_count,
+                    current_access_count=self._clock,
+                    target_len=stats.target_len,
+                    kind="kvcache_adapter",
+                )
+            )
             prefixes.append(
                 RadixHotPrefix(
                     cache_key=cache_key,
@@ -249,18 +257,22 @@ class RadixPrefixCache:
             return 0.0
 
         candidate_tokens = tuple(token_ids[:target_len])
-        best_hot_score = 0.0
+        missing_tokens = target_len - current_match_len
+        best_priority = 0.0
         for hot in self.top_hot_prefixes(cache_key, limit=limit):
             common = self._common_tuple_prefix_len(candidate_tokens, hot.token_ids)
-            if common <= current_match_len:
-                continue
-            coverage = common / target_len
-            best_hot_score = max(best_hot_score, hot.score * coverage)
+            best_priority = max(
+                best_priority,
+                prefill_overlap_priority(
+                    hot_priority=hot.score,
+                    common_len=common,
+                    target_len=target_len,
+                    current_match_len=current_match_len,
+                    missing_tokens=missing_tokens,
+                ),
+            )
 
-        if best_hot_score <= 0.0:
-            return 0.0
-        missing_tokens = target_len - current_match_len
-        return best_hot_score + min(missing_tokens, 8192) / 2048.0
+        return best_priority
 
     def insert(
         self,

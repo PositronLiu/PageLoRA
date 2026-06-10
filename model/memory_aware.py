@@ -8,10 +8,12 @@ the currently active adapter.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 import torch
+
+from model.cache_priority import CachePrioritySignals, cache_priority
 
 
 class MemoryPressure(Enum):
@@ -25,12 +27,13 @@ class MemoryPressure(Enum):
 
 @dataclass
 class OffloadCandidate:
-    """One offloadable unit with eviction priority scoring.
+    """One offloadable unit with shared cache-priority scoring.
 
-    Priority is computed as ``bytes * kind_weight / (1 + recency)`` so that
-    large, cold items are evicted first.  Adapter weights get a higher
-    *kind_weight* than KV cache because they are cheaper to reload (a single
-    ``.to(device)`` call vs. re-computing prefix KV).
+    ``priority`` is the same residency priority used by prefill candidate
+    selection: higher means more valuable to keep resident.  Offload callers
+    evict the lowest priority candidates first.  Adapter weights receive a
+    lower residency weight than KV cache because they are cheaper to reload
+    than recomputing prefix KV.
     """
 
     kind: str
@@ -38,17 +41,19 @@ class OffloadCandidate:
     bytes: int
     last_access: int = 0
     touch_count: int = 0
-
-    _KIND_WEIGHT: dict[str, float] = field(
-        default_factory=lambda: {"adapter": 1.5, "kvcache_adapter": 1.0},
-        init=False,
-        repr=False,
-    )
+    current_access_count: int = 0
 
     @property
     def priority(self) -> float:
-        w = self._KIND_WEIGHT.get(self.kind, 1.0)
-        return self.bytes * w / ((1.0 + self.last_access) * (1.0 + self.touch_count))
+        return cache_priority(
+            CachePrioritySignals(
+                touch_count=self.touch_count,
+                last_access_count=self.last_access,
+                current_access_count=self.current_access_count,
+                num_bytes=self.bytes,
+                kind=self.kind,
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -216,10 +221,11 @@ class MemoryAwareCoordinator:
     # ── candidate building ─────────────────────────────────────────
 
     def get_offload_candidates(self) -> list[OffloadCandidate]:
-        """Return offload candidates sorted by eviction priority (highest first).
+        """Return offload candidates sorted in evict-first order.
 
         The active adapter (weights + KV cache) is excluded from the candidate
-        list so it is never evicted.
+        list so it is never evicted.  Lower shared cache priority is evicted
+        first; ties prefer freeing larger resident state.
         """
         candidates: list[OffloadCandidate] = []
 
@@ -235,6 +241,7 @@ class MemoryAwareCoordinator:
                     bytes=num_bytes,
                     last_access=self._adapter_last_access.get(name, 0),
                     touch_count=self._adapter_touch_count.get(name, 0),
+                    current_access_count=self._access_clock,
                 )
             )
 
@@ -250,10 +257,11 @@ class MemoryAwareCoordinator:
                     bytes=num_bytes,
                     last_access=self._kvcache_last_access.get(name, 0),
                     touch_count=self._kvcache_touch_count.get(name, 0),
+                    current_access_count=self._access_clock,
                 )
             )
 
-        candidates.sort(key=lambda c: c.priority, reverse=True)
+        candidates.sort(key=lambda c: (c.priority, -c.bytes))
         return candidates
 
     # ── offload ────────────────────────────────────────────────────
