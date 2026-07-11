@@ -1,7 +1,5 @@
 # PageLoRA
 
-**GitHub:** https://github.com/wzbxpy/PageLoRA
-
 PageLoRA is a FlashInfer-based inference engine for low-latency LoRA serving on a single GPU. It focuses on the decode path of transformer inference, combining paged KV cache management, prefix reuse, CUDA graph replay, FlashInfer kernels, and lightweight LoRA weight handling.
 
 The implementation targets practical edge-side and workstation-class deployments where startup time, memory pressure, and repeated short interactions matter as much as peak throughput.
