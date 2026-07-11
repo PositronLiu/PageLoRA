@@ -17,20 +17,42 @@ The implementation targets practical edge-side and workstation-class deployments
 
 Experiments were run mainly on an NVIDIA RTX 3090 24GB with 5B-8B models. Detailed raw tables are in [docs/experiment_results_infer_engine.md](docs/experiment_results_infer_engine.md).
 
-| Setting | Result |
-|---|---:|
-| Qwen3-8B FlashInfer LoRA merge with CUDA graph | 46.68 tok/s |
-| Qwen3-8B FlashInfer LoRA no-merge with CUDA graph | 45.23 tok/s |
-| Llama-2-7B FlashInfer LoRA merge with CUDA graph | 50.71 tok/s |
-| Llama-2-7B FlashInfer LoRA no-merge with CUDA graph | 49.34 tok/s |
-| xLAM-7B FlashInfer LoRA merge, 512-token decode | 51.36 tok/s |
+| Setting                                                     |      Result |
+| ----------------------------------------------------------- | ----------: |
+| Qwen3-8B FlashInfer LoRA merge with CUDA graph              | 46.68 tok/s |
+| Qwen3-8B FlashInfer LoRA no-merge with CUDA graph           | 45.23 tok/s |
+| Llama-2-7B FlashInfer LoRA merge with CUDA graph            | 50.71 tok/s |
+| Llama-2-7B FlashInfer LoRA no-merge with CUDA graph         | 49.34 tok/s |
+| xLAM-7B FlashInfer LoRA merge, 512-token decode             | 51.36 tok/s |
 | DeepSeek-Coder-6.7B FlashInfer LoRA merge, 512-token decode | 51.88 tok/s |
+
+### Experiment Figures
 
 ![LoRA CUDA graph throughput](assets/figures/inference_lora_graph_throughput.png)
 
+![CUDA graph speedup](assets/figures/inference_cuda_graph_speedup.png)
+
+![Agent 7B decode summary](assets/figures/inference_agent7b_decode_summary.png)
+
+![Additional model LoRA serving](assets/figures/inference_additional_model_lora_serving.png)
+
+#### Prefix Reuse
+
 ![Prefix reuse latency](assets/figures/inference_prefix_reuse_latency.png)
 
+![Prefix reuse summary](assets/figures/inference_prefix_reuse_summary.png)
+
+![Additional prefix reuse summary](assets/figures/inference_additional_prefix_reuse_summary.png)
+
+#### Long Context
+
+![Long decode summary](assets/figures/inference_long_decode_summary.png)
+
 ![Long-context cache comparison](assets/figures/inference_long_context_cache.png)
+
+#### Load Time
+
+![Load time comparison](assets/figures/inference_load_time_comparison.png)
 
 ## Project Layout
 
@@ -51,26 +73,10 @@ assets/figures/       experiment figures
 Use Python 3.10 or newer and a CUDA-capable PyTorch environment.
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
 FlashInfer paged-KV execution requires CUDA. Some JIT paths also require a system CUDA Toolkit with `nvcc`, not only the CUDA runtime bundled with PyTorch.
-
-## Quick Checks
-
-Run CPU-safe unit tests that do not require loading a model:
-
-```powershell
-python -m pytest test/test_radix_cache.py test/test_paged_kvcache_manager.py test/test_inference_bench_entrypoints.py
-```
-
-Run FlashInfer-specific tests in an environment with `flashinfer-python` and CUDA:
-
-```powershell
-python -m pytest test/test_flashinfer_backend.py test/test_flashinfer_cuda_graph.py test/test_flashinfer_packed_ops.py
-```
 
 ## Benchmark Examples
 
@@ -98,11 +104,4 @@ python -m test.inference.bench_prefix_caching `
   --prefix-requests 4 `
   --max-new-tokens 128 `
   --flashinfer-cuda-graph-decode
-```
-
-To connect a local checkout to GitHub:
-
-```powershell
-git remote add origin https://github.com/wzbxpy/PageLoRA.git
-git push -u origin main
 ```
