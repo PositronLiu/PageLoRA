@@ -8,6 +8,7 @@ different suffixes, which exercises shared-prefix reuse with radix branching.
 from __future__ import annotations
 
 import argparse
+import copy
 import statistics
 import time
 from dataclasses import dataclass
@@ -261,6 +262,10 @@ def _run_flashinfer_prefix_mode(args: argparse.Namespace, device: torch.device, 
 def _run_vllm_prefix_mode(args: argparse.Namespace, device: torch.device, *, mode: str) -> PrefixBenchStats:
     """Benchmark vLLM prefix-cache reuse for one mode."""
 
+    # Prefix benchmarks report end-to-end latency. The decode timing helper's
+    # one-token probe would populate the prefix cache before the real request.
+    args = copy.copy(args)
+    args.throughput_timing = "total"
     _set_seed(args.seed, seed_cuda=False)
     args.vllm_enable_prefix_caching = True
     started = time.perf_counter()
@@ -271,8 +276,14 @@ def _run_vllm_prefix_mode(args: argparse.Namespace, device: torch.device, *, mod
         tokenizer = llm.get_tokenizer()
         _, prompt_ids = _build_prefix_prompt_ids(args, tokenizer, mode=mode)
         lora_request = _make_vllm_lora_request(args)
-        print(f"\n[{name}] prompt_tokens={[len(ids) for ids in prompt_ids]}", flush=True)
+        print(
+            f"\n[{name}] prompt_tokens={[len(ids) for ids in prompt_ids]} "
+            f"reset_cache_between_runs={args.prefix_reset_cache_between_runs} "
+            "throughput_timing=total",
+            flush=True,
+        )
         for sequence_index in range(1, max(0, args.warmup_runs) + 1):
+            _reset_vllm_prefix_cache(llm, args.prefix_reset_cache_between_runs)
             for request_index, ids in enumerate(prompt_ids, start=1):
                 result = _run_vllm_once(llm, ids, args, device, lora_request=lora_request)
                 _print_prefix_request(
@@ -289,6 +300,7 @@ def _run_vllm_prefix_mode(args: argparse.Namespace, device: torch.device, *, mod
         generated_tokens: list[int] = []
         prompt_token_counts: list[int] = []
         for sequence_index in range(1, max(1, args.measure_runs) + 1):
+            _reset_vllm_prefix_cache(llm, args.prefix_reset_cache_between_runs)
             for request_index, ids in enumerate(prompt_ids, start=1):
                 result = _run_vllm_once(llm, ids, args, device, lora_request=lora_request)
                 latencies.append(result.total_s)
@@ -314,6 +326,22 @@ def _run_vllm_prefix_mode(args: argparse.Namespace, device: torch.device, *, mod
     finally:
         llm = None
         _release_cuda_memory()
+
+
+def _reset_vllm_prefix_cache(llm, enabled: bool) -> None:
+    """Start a cold sequence or fail explicitly if this vLLM cannot reset."""
+
+    if not enabled:
+        return
+    reset = getattr(llm, "reset_prefix_cache", None)
+    if not callable(reset):
+        raise RuntimeError(
+            "This vLLM version does not expose LLM.reset_prefix_cache(); "
+            "use a compatible version or explicitly select "
+            "--prefix-reset-cache-between-runs false for hot-cache measurements."
+        )
+    if reset() is False:
+        raise RuntimeError("vLLM prefix cache reset failed; refusing to report a cold sequence")
 
 
 def build_prefix_parser() -> argparse.ArgumentParser:
@@ -357,7 +385,7 @@ def build_prefix_parser() -> argparse.ArgumentParser:
         type=_parse_bool,
         default=True,
         metavar="true|false",
-        help="For FlashInfer, clear radix/paged cache before each warmup or measured sequence.",
+        help="Clear backend prefix cache before each warmup or measured sequence (both backends).",
     )
     return parser
 

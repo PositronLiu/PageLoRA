@@ -9,3 +9,4 @@ logs/
 models/
 checkpoints/
 outputs/
+course_results/

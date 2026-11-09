@@ -4,6 +4,16 @@ PageLoRA is a FlashInfer-based inference engine for low-latency LoRA serving on 
 
 The implementation targets practical edge-side and workstation-class deployments where startup time, memory pressure, and repeated short interactions matter as much as peak throughput.
 
+## 中文课程材料
+
+- [技术详解与代码导读](docs/技术详解与代码导读.md)
+- [项目说明与课程适配](docs/项目说明与课程适配.md)
+- [服务器实验指南](docs/服务器实验指南.md)
+- [课程进度汇报 PPT](docs/汇报/PageLoRA_课程进度汇报.pptx) / [讲稿](docs/汇报/讲稿.md)
+
+Course experiments: `python -m scripts.run_course_experiments --model /path/to/model --dry-run`.
+The course materials distinguish historical measurements from pending server validation.
+
 ## Highlights
 
 - FlashInfer paged-KV attention with reusable page-table buffers.
@@ -84,7 +94,7 @@ FlashInfer generation benchmark:
 
 ```powershell
 python -m test.inference.bench_flashinfer_generate `
-  --model-path D:\models\Qwen3-8B `
+  --model D:\models\Qwen3-8B `
   --target-prompt-tokens 2048 `
   --max-new-tokens 128 `
   --warmup-runs 1 `
@@ -96,8 +106,8 @@ Prefix reuse benchmark:
 
 ```powershell
 python -m test.inference.bench_prefix_caching `
-  --model-path D:\models\Qwen3-8B `
-  --engine flashinfer `
+  --model D:\models\Qwen3-8B `
+  --prefix-backend flashinfer `
   --prefix-bench-mode branch `
   --shared-prefix-tokens 2048 `
   --branch-suffix-tokens 64 `
