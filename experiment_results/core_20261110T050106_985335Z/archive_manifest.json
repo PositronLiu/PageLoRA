@@ -1,0 +1,15 @@
+{
+  "exported": [
+    "hf_512.log",
+    "hf_512.memory.json",
+    "measurements.csv",
+    "metadata.json",
+    "runs.json",
+    "summary.csv",
+    "summary.json",
+    "summary.md"
+  ],
+  "omitted": [],
+  "tail_only_logs": [],
+  "note": "Full first_logits arrays and source.zip remain in raw server results. Numerical comparisons are retained in report.json. This archive is for analysis, not a replacement for raw evidence."
+}
