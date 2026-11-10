@@ -6,6 +6,7 @@ The implementation targets practical edge-side and workstation-class deployments
 
 ## 中文课程材料
 
+- [跨后端正确性验证、显存采样与自动报告](docs/对照验证与自动报告.md)
 - [技术详解与代码导读](docs/技术详解与代码导读.md)
 - [项目说明与课程适配](docs/项目说明与课程适配.md)
 - [服务器实验指南](docs/服务器实验指南.md)

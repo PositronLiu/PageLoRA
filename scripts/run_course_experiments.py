@@ -12,6 +12,8 @@ import shlex
 import subprocess
 import sys
 
+from scripts.benchmark_support import DeviceMemorySampler, summarize
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -68,7 +70,11 @@ def main():
     parser.add_argument("--gpu", default="0", help="Physical GPU exposed as logical cuda:0.")
     parser.add_argument("--output-dir", default="course_results")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--memory-interval", type=float, default=0.5,
+                        help="Whole-device nvidia-smi sampling interval in seconds (>=0.1).")
     args = parser.parse_args()
+    if not 0.1 <= args.memory_interval <= 60:
+        parser.error("--memory-interval must be between 0.1 and 60 seconds")
     if "," in args.gpu or not args.gpu.strip():
         parser.error("--gpu must select exactly one GPU index or UUID")
     if min(args.prompt_lengths + [args.output_tokens, args.measure_runs, args.max_model_len]) <= 0 or args.warmup_runs < 0:
@@ -118,10 +124,13 @@ def main():
     for name, command in jobs:
         log = destination / f"{name}.log"
         print(f"Running {name}; log: {log}", flush=True)
-        with log.open("w", encoding="utf-8") as output:
+        with log.open("w", encoding="utf-8") as output, DeviceMemorySampler(
+            args.gpu, destination / f"{name}.memory.json", args.memory_interval
+        ):
             result = subprocess.run(command, cwd=ROOT, env=env, stdout=output, stderr=subprocess.STDOUT, text=True)
         outcomes.append({"name": name, "command": command, "returncode": result.returncode, "log": str(log)})
         (destination / "runs.json").write_text(json.dumps(outcomes, ensure_ascii=False, indent=2), encoding="utf-8")
+        summarize(destination)
         if result.returncode:
             raise SystemExit(f"Experiment failed ({result.returncode}); inspect {log}")
     print(f"Completed {len(jobs)} jobs: {destination}")
