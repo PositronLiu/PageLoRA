@@ -141,6 +141,8 @@ def main():
         (destination / 'pipeline.json').write_text(json.dumps(state, indent=2), encoding='utf-8')
         complete = write_report(destination)
         print('Results:', destination, flush=True)
+        from scripts.archive_experiments import archive
+        print('Git-ready results:', archive(destination), flush=True)
     success = complete or (args.profile == 't4' and state['completed_stages'] == 2 and state['source_unchanged'] and 'error' not in state)
     raise SystemExit(0 if success else 1)
 

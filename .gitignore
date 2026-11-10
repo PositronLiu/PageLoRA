@@ -10,3 +10,4 @@ models/
 checkpoints/
 outputs/
 course_results/
+!experiment_results/**/*.log

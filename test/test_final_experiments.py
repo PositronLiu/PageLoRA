@@ -7,9 +7,27 @@ import unittest
 from scripts.check_inference_correctness import validate_coverage
 from scripts.run_final_experiments import build_commands, source_manifest, write_report
 from scripts.hardware_support import choose_dtype
+from scripts.archive_experiments import archive
 
 
 class FinalExperimentTests(unittest.TestCase):
+    def test_git_archive_keeps_metrics_but_omits_full_logits(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = root / 'raw' / 'final_example'
+            raw.mkdir(parents=True)
+            (raw / 'hf.json').write_text(json.dumps({'first_logits': [1, 2], 'tokens': [4]}))
+            (raw / 'report.json').write_text(json.dumps({'first_logits': {'allclose': True}}))
+            (raw / 'run.log').write_text('failure evidence')
+            (raw / 'source.zip').write_bytes(b'not exported')
+            result = archive(raw, root / 'archive')
+            self.assertNotIn('first_logits', json.loads((result / 'hf.json').read_text()))
+            self.assertTrue(json.loads((result / 'report.json').read_text())['first_logits']['allclose'])
+            self.assertEqual((result / 'run.log').read_text(), 'failure evidence')
+            self.assertFalse((result / 'source.zip').exists())
+            with self.assertRaises(FileExistsError):
+                archive(raw, root / 'archive')
+
     def test_hardware_dtype_policy(self):
         self.assertEqual(choose_dtype('auto', False), 'float16')
         self.assertEqual(choose_dtype('auto', True), 'bfloat16')
