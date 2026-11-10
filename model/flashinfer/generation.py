@@ -701,6 +701,10 @@ def generate_with_flashinfer_kvcache(
             if token_id is not None and not ignore_eos and token_id == tokenizer.eos_token_id:
                 break
 
+            # The final sampled token needs no next-step logits or KV allocation.
+            if _step + 1 >= max_new_tokens:
+                break
+
             reserved_spans = None
             page_table: FlashInferPageTable | None = None
             chunk_index = len(request_cache.page_span_chunks)
@@ -984,6 +988,9 @@ def generate_batch_with_flashinfer_kvcache(
                 continuing_tokens.append(token_id)
                 continuing_positions.append(current_positions[active_index])
                 continuing_requests.append(request_caches[active_index])
+
+            if _step + 1 >= max_new_tokens:
+                break
 
             if not continuing_indices:
                 active_indices = []

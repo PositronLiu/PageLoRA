@@ -37,6 +37,30 @@ def compare_logits(reference, candidate, atol, rtol):
             'atol': atol, 'rtol': rtol}
 
 
+def validate_coverage(reports, variants, case_names, output_tokens):
+    """Fail closed when a worker silently omits cases or required evidence."""
+    errors = []
+    expected = set(case_names)
+    for variant in variants:
+        rows = reports.get(variant, [])
+        names = [row.get('case') for row in rows]
+        if len(names) != len(expected) or set(names) != expected:
+            errors.append(f'{variant}: missing, duplicate or unexpected cases: {names}')
+        for row in rows:
+            label = f"{variant}/{row.get('case')}"
+            tokens = row.get('tokens')
+            if not isinstance(tokens, list) or len(tokens) != output_tokens:
+                errors.append(f'{label}: missing or truncated output tokens')
+            if variant != 'vllm':
+                logits = row.get('first_logits')
+                if not isinstance(logits, list) or not logits or not all(
+                        isinstance(v, (int, float)) and math.isfinite(v) for v in logits):
+                    errors.append(f'{label}: missing or non-finite first logits')
+            if variant.startswith('flashinfer') and not isinstance(row.get('reuse_tokens'), list):
+                errors.append(f'{label}: missing cache reuse output')
+    return errors
+
+
 def worker(args):
     import torch
     from test.inference.common import build_parser, _make_flashinfer_manager, _make_hf_manager, _make_vllm_llm
@@ -218,11 +242,12 @@ def main():
             checks.append({'variant':'graph_vs_eager','case':row['case'],
                            'sequence':compare_sequences(ref['tokens'],row['tokens']),
                            'fixed_output_length':len(ref['tokens'])==len(row['tokens'])==args.output_tokens})
-    passed=bool(checks) and all(o['returncode']==0 for o in outcomes) and all(
+    coverage_errors=validate_coverage(reports, args.variants, [c['name'] for c in cases], args.output_tokens)
+    passed=not coverage_errors and bool(checks) and all(o['returncode']==0 for o in outcomes) and all(
         c['sequence']['equal'] and c['fixed_output_length'] and c.get('cache_reuse',{'equal':True})['equal']
         and c.get('first_logits',{'allclose':True})['allclose'] and c.get('reuse_exercised',True)
         and c.get('graph_exercised',True) for c in checks)
-    report={'strict_pass':passed,'checks':checks,'runs':outcomes,
+    report={'strict_pass':passed,'coverage_errors':coverage_errors,'checks':checks,'runs':outcomes,
             'limitations':['vLLM compares greedy token IDs only, not full logits.',
                 'First-step logits cover prefill; later steps compare sequences, not teacher-forced logits.',
                 'A mismatch requires inspecting first divergence and floating-point margins; it alone does not prove a bug.',
@@ -237,6 +262,7 @@ def main():
         lines.append(f"| {c['variant']} | {c['case']} | {c['sequence']['equal']} | "
                      f"{c['sequence'].get('first_difference')} | {c.get('first_logits',{}).get('allclose','n/a')} | "
                      f"{c.get('reuse_exercised','n/a')} | {c.get('graph_exercised','n/a')} |")
+    lines+=['','## Missing evidence',''] + (coverage_errors or ['None'])
     lines+=['','## Scope','']+[f'- {limitation}' for limitation in report['limitations']]
     (destination/'report.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
     print('Strict pass:',passed,'Report:',destination/'report.json')

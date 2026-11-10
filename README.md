@@ -1,5 +1,7 @@
 # PageLoRA
 
+服务器实验请先阅读 [实验操作清单](docs/实验操作清单.md)。完整流程入口：`python -m scripts.run_final_experiments --model /path/to/model`，按正确性、核心性能、前缀复用顺序运行并保存结果。可加 `--dry-run` 仅查看命令。
+
 PageLoRA is a FlashInfer-based inference engine for low-latency LoRA serving on a single GPU. It focuses on the decode path of transformer inference, combining paged KV cache management, prefix reuse, CUDA graph replay, FlashInfer kernels, and lightweight LoRA weight handling.
 
 The implementation targets practical edge-side and workstation-class deployments where startup time, memory pressure, and repeated short interactions matter as much as peak throughput.

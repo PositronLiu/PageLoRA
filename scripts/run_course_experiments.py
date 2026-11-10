@@ -133,6 +133,9 @@ def main():
         summarize(destination)
         if result.returncode:
             raise SystemExit(f"Experiment failed ({result.returncode}); inspect {log}")
+    rows = summarize(destination)
+    if len(rows) != len(jobs) or any(row["status"] != "ok" for row in rows):
+        raise SystemExit(f"Incomplete measurements; inspect {destination / 'summary.md'}")
     print(f"Completed {len(jobs)} jobs: {destination}")
 
 
