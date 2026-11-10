@@ -1,0 +1,20 @@
+[
+  {
+    "name": "hf_512",
+    "returncode": 0,
+    "status": "ok",
+    "error": "",
+    "samples": 3,
+    "mean_total_s": 1.0291666666666666,
+    "p50_total_s": 1.0309,
+    "p95_total_s": 1.03423,
+    "output_tokens": 96,
+    "total_tokens_per_s": 31.093117408906885,
+    "prompt_tokens_min": 529,
+    "prompt_tokens_max": 529,
+    "fixed_output_length": true,
+    "complete_samples": true,
+    "device_sampled_peak_mib": 3923.0,
+    "memory_samples": 24
+  }
+]

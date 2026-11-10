@@ -1,0 +1,4 @@
+﻿job,backend,sequence,request,prompt_tokens,total_s,generated_tokens
+hf_512,hf_generate,1,,529,1.022,32
+hf_512,hf_generate,2,,529,1.0309,32
+hf_512,hf_generate,3,,529,1.0346,32

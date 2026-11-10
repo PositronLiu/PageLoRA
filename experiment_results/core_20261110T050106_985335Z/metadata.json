@@ -1,0 +1,84 @@
+{
+  "utc": "20261110T050106_985335Z",
+  "platform": "Linux-5.15.0-86-generic-x86_64-with-glibc2.35",
+  "python": "3.12.4 | packaged by Anaconda, Inc. | (main, Jun 18 2024, 15:12:24) [GCC 11.2.0]",
+  "args": {
+    "model": "/root/bayes-tmp/models/DeepSeek-R1-Distill-Qwen-1.5B",
+    "suite": "core",
+    "prompt_lengths": [
+      512
+    ],
+    "output_tokens": 32,
+    "warmup_runs": 1,
+    "measure_runs": 3,
+    "max_model_len": 2048,
+    "gpu": "0",
+    "output_dir": "/root/bayes-tmp/pagelora-t4-hf",
+    "dry_run": false,
+    "memory_interval": 0.5,
+    "dtype": "float16",
+    "backends": [
+      "hf"
+    ]
+  },
+  "environment": {
+    "CUDA_VERSION": "12.4.1",
+    "CUDA_VISIBLE_DEVICES": "0",
+    "MINI_OPENCLAW_FLASHINFER_PERF_LOG": "1",
+    "MINI_OPENCLAW_FLASHINFER_PERF_SYNC": "0",
+    "MINI_OPENCLAW_FLASHINFER_TORCH_COMPILE": "0",
+    "MINI_OPENCLAW_FLASHINFER_COMPILE_MLP": "0",
+    "MINI_OPENCLAW_FLASHINFER_COMPILE_POST": "0"
+  },
+  "git": {
+    "command": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "returncode": 0,
+    "stdout": "0a8c740140bcb9b4acef78da789bf10196c49920\n",
+    "stderr": ""
+  },
+  "diff": {
+    "command": [
+      "git",
+      "diff",
+      "--stat"
+    ],
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "packages": {
+    "command": [
+      "/opt/conda/bin/python",
+      "-m",
+      "pip",
+      "freeze"
+    ],
+    "returncode": 0,
+    "stdout": "absl-py==2.2.0\naccelerate==1.15.0\nanaconda-anon-usage @ file:///croot/anaconda-anon-usage_1710965072196/work\nanyio==4.9.0\narchspec @ file:///croot/archspec_1709217642129/work\nargon2-cffi==23.1.0\nargon2-cffi-bindings==21.2.0\narrow==1.3.0\nasttokens==3.0.0\nasync-lru==2.0.5\nattrs==25.3.0\nbabel==2.17.0\nbeautifulsoup4==4.13.3\nbleach==6.2.0\nboltons @ file:///work/perseverance-python-buildout/croot/boltons_1698851177130/work\nBrotli @ file:///croot/brotli-split_1714483155106/work\ncertifi @ file:///croot/certifi_1717618050233/work/certifi\ncffi @ file:///croot/cffi_1714483155441/work\ncharset-normalizer @ file:///tmp/build/80754af9/charset-normalizer_1630003229654/work\ncomm==0.2.2\nconda @ file:///croot/conda_1715635703388/work\nconda-content-trust @ file:///croot/conda-content-trust_1714483159009/work\nconda-libmamba-solver @ file:///croot/conda-libmamba-solver_1706733287605/work/src\nconda-package-handling @ file:///croot/conda-package-handling_1718138267740/work\nconda_package_streaming @ file:///croot/conda-package-streaming_1718136078615/work\ncryptography @ file:///croot/cryptography_1714660666131/work\ndebugpy==1.8.13\ndecorator==5.2.1\ndefusedxml==0.7.1\ndistro @ file:///croot/distro_1714488253808/work\nexecuting==2.2.0\nfastjsonschema==2.21.1\nfilelock==3.13.1\nfqdn==1.5.1\nfrozendict @ file:///croot/frozendict_1713194832637/work\nfsspec==2024.6.1\ngrpcio==1.71.0\nh11==0.14.0\nhf-xet==1.8.0\nhttpcore==1.0.7\nhttpx==0.28.1\nhuggingface_hub==0.36.2\nidna @ file:///croot/idna_1714398848350/work\nipykernel==6.29.5\nipython==9.0.2\nipython_pygments_lexers==1.1.1\nisoduration==20.11.0\njedi==0.19.2\nJinja2==3.1.6\njson5==0.10.0\njsonpatch @ file:///croot/jsonpatch_1714483231291/work\njsonpointer==2.1\njsonschema==4.23.0\njsonschema-specifications==2024.10.1\njupyter-events==0.12.0\njupyter-lsp==2.2.5\njupyter_client==8.6.3\njupyter_core==5.7.2\njupyter_server==2.15.0\njupyter_server_terminals==0.5.3\njupyterlab==4.3.6\njupyterlab-language-pack-zh-CN==4.3.post3\njupyterlab_pygments==0.3.0\njupyterlab_server==2.27.3\nlibmambapy @ file:///croot/mamba-split_1714483352891/work/libmambapy\nMarkdown==3.7\nMarkupSafe==3.0.2\nmatplotlib-inline==0.1.7\nmenuinst @ file:///croot/menuinst_1718132535249/work\nmistune==3.1.3\nmodelscope==1.40.3\nmodelscope-hub==0.7.0\nmpmath==1.3.0\nnbclient==0.10.2\nnbconvert==7.16.6\nnbformat==5.10.4\nnest-asyncio==1.6.0\nnetworkx==3.3\nnotebook_shim==0.2.4\nnumpy==2.2.5\nnvidia-cublas-cu12==12.4.2.65\nnvidia-cuda-cupti-cu12==12.4.99\nnvidia-cuda-nvrtc-cu12==12.4.99\nnvidia-cuda-runtime-cu12==12.4.99\nnvidia-cudnn-cu12==9.1.0.70\nnvidia-cufft-cu12==11.2.0.44\nnvidia-curand-cu12==10.3.5.119\nnvidia-cusolver-cu12==11.6.0.99\nnvidia-cusparse-cu12==12.3.0.142\nnvidia-nccl-cu12==2.20.5\nnvidia-nvjitlink-cu12==12.4.99\nnvidia-nvtx-cu12==12.4.99\noverrides==7.7.0\npackaging @ file:///croot/packaging_1710807400464/work\npandocfilters==1.5.1\nparso==0.8.4\npeft==0.18.1\npexpect==4.9.0\npillow==11.0.0\nplatformdirs @ file:///work/perseverance-python-buildout/croot/platformdirs_1701732573265/work\npluggy @ file:///work/perseverance-python-buildout/croot/pluggy_1698805497733/work\nprometheus_client==0.21.1\nprompt_toolkit==3.0.50\nprotobuf==6.30.1\npsutil==7.0.0\nptyprocess==0.7.0\npure_eval==0.2.3\npycosat @ file:///croot/pycosat_1714510623388/work\npycparser @ file:///tmp/build/80754af9/pycparser_1636541352034/work\nPygments==2.19.1\nPySocks @ file:///work/perseverance-python-buildout/croot/pysocks_1698845478203/work\npython-dateutil==2.9.0.post0\npython-json-logger==3.3.0\nPyYAML==6.0.2\npyzmq==26.3.0\nreferencing==0.36.2\nregex==2026.11.9\nrequests @ file:///croot/requests_1716902831423/work\nrfc3339-validator==0.1.4\nrfc3986-validator==0.1.1\nrpds-py==0.23.1\nruamel.yaml @ file:///work/perseverance-python-buildout/croot/ruamel.yaml_1698863605521/work\nsafetensors==0.7.0\nSend2Trash==1.8.3\nsetuptools==69.5.1\nsix==1.17.0\nsniffio==1.3.1\nsoupsieve==2.6\nstack-data==0.6.3\nsympy==1.13.1\ntensorboard==2.19.0\ntensorboard-data-server==0.7.2\nterminado==0.18.1\ntinycss2==1.4.0\ntokenizers==0.22.2\ntorch==2.4.1+cu124\ntorchaudio==2.4.1+cu124\ntorchvision==0.19.1+cu124\ntornado==6.4.2\ntqdm @ file:///croot/tqdm_1716395931952/work\ntraitlets==5.14.3\ntransformers==4.57.6\ntriton==3.0.0\ntruststore @ file:///work/perseverance-python-buildout/croot/truststore_1701735771625/work\ntypes-python-dateutil==2.9.0.20241206\ntyping_extensions==4.12.2\nuri-template==1.3.0\nurllib3 @ file:///croot/urllib3_1718912636303/work\nwcwidth==0.2.13\nwebcolors==24.11.1\nwebencodings==0.5.1\nwebsocket-client==1.8.0\nWerkzeug==3.1.3\nwheel==0.43.0\nzstandard @ file:///croot/zstandard_1714677652653/work\n",
+    "stderr": ""
+  },
+  "hardware": {
+    "name": "Tesla T4",
+    "capability": [
+      7,
+      5
+    ],
+    "memory_gib": 14.56414794921875,
+    "bf16": false,
+    "torch": "2.4.1+cu124",
+    "cuda": "12.4",
+    "dtype": "float16"
+  },
+  "gpu": {
+    "command": [
+      "nvidia-smi"
+    ],
+    "returncode": 0,
+    "stdout": "Tue Nov 10 13:01:07 2026       \n+-----------------------------------------------------------------------------------------+\n| NVIDIA-SMI 570.124.04             Driver Version: 570.124.04     CUDA Version: 12.8     |\n|-----------------------------------------+------------------------+----------------------+\n| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |\n|                                         |                        |               MIG M. |\n|=========================================+========================+======================|\n|   0  Tesla T4                       On  |   00000000:00:08.0 Off |                    0 |\n| N/A   35C    P8             15W /   70W |       1MiB /  15360MiB |      0%      Default |\n|                                         |                        |                  N/A |\n+-----------------------------------------+------------------------+----------------------+\n                                                                                         \n+-----------------------------------------------------------------------------------------+\n| Processes:                                                                              |\n|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |\n|        ID   ID                                                               Usage      |\n|=========================================================================================|\n|  No running processes found                                                             |\n+-----------------------------------------------------------------------------------------+\n",
+    "stderr": ""
+  }
+}

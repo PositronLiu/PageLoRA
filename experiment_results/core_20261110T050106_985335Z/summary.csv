@@ -1,0 +1,2 @@
+﻿name,returncode,status,error,samples,mean_total_s,p50_total_s,p95_total_s,output_tokens,total_tokens_per_s,prompt_tokens_min,prompt_tokens_max,fixed_output_length,complete_samples,device_sampled_peak_mib,memory_samples
+hf_512,0,ok,,3,1.0291666666666666,1.0309,1.03423,96,31.093117408906885,529,529,True,True,3923.0,24
