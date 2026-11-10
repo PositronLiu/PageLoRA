@@ -1,0 +1,61 @@
+[flashinfer-vs-hf-generate]
+model=/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B
+device=cuda:0
+warmup_runs=2
+measure_runs=10
+max_new_tokens=128
+target_prompt_tokens=2048
+ignore_eos=True
+sampling_mode=greedy_fast
+compute_logprobs=False
+throughput_timing=total
+benchmark_path=hf
+adapter_role=base
+flashinfer_cache_policy=cold
+flashinfer_kv_append_mode=manual
+flashinfer_qk_norm=False
+flashinfer_cuda_graph_decode=False
+vllm_enable_prefix_caching=False
+vllm_max_model_len=default
+vllm_enforce_eager=False
+vllm_enable_lora=False
+vllm_lora_path=
+vllm_lora_name=general
+vllm_lora_id=1
+vllm_max_lora_rank=16
+[LOG 2026-11-10 07:30:23 UTC] ModelManager init model=/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B device=cuda:0 dtype=torch.float16 cpu_offload=False enable_multilora=False kvcache_mode=hf kvcache_decompose=False
+[LOG 2026-11-10 07:30:23 UTC] Tokenizer loaded
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:03<00:03,  3.40s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:06<00:00,  3.06s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:06<00:00,  3.11s/it]
+[LOG 2026-11-10 07:30:33 UTC] Base model loaded
+[LOG 2026-11-10 07:30:33 UTC] Enabled input require grads for checkpointed training
+[LOG 2026-11-10 07:30:33 UTC] Manual LoRA ready active=general lora_tensors_gpu=0
+
+[hf_generate] prompt_tokens=2093 prompt_chars=11176
+[hf_generate] warmup#1 total_s=2.1298 prefill_s=0.2432 decode_s=1.8762 generated_tokens=128 tokens_per_s=60.0995 throughput_timing=total
+[hf_generate] warmup#2 total_s=1.8813 prefill_s=0.0607 decode_s=1.8119 generated_tokens=128 tokens_per_s=68.0389 throughput_timing=total
+[hf_generate] measure#1 total_s=1.8798 prefill_s=0.0606 decode_s=1.8104 generated_tokens=128 tokens_per_s=68.0929 throughput_timing=total
+[hf_generate] measure#2 total_s=1.8780 prefill_s=0.0614 decode_s=1.8079 generated_tokens=128 tokens_per_s=68.1573 throughput_timing=total
+[hf_generate] measure#3 total_s=1.8773 prefill_s=0.0605 decode_s=1.8082 generated_tokens=128 tokens_per_s=68.1845 throughput_timing=total
+[hf_generate] measure#4 total_s=1.8769 prefill_s=0.0604 decode_s=1.8080 generated_tokens=128 tokens_per_s=68.1984 throughput_timing=total
+[hf_generate] measure#5 total_s=1.8778 prefill_s=0.0608 decode_s=1.8083 generated_tokens=128 tokens_per_s=68.1636 throughput_timing=total
+[hf_generate] measure#6 total_s=1.8760 prefill_s=0.0606 decode_s=1.8069 generated_tokens=128 tokens_per_s=68.2299 throughput_timing=total
+[hf_generate] measure#7 total_s=1.8763 prefill_s=0.0605 decode_s=1.8073 generated_tokens=128 tokens_per_s=68.2204 throughput_timing=total
+[hf_generate] measure#8 total_s=1.8774 prefill_s=0.0613 decode_s=1.8074 generated_tokens=128 tokens_per_s=68.1800 throughput_timing=total
+[hf_generate] measure#9 total_s=1.8765 prefill_s=0.0604 decode_s=1.8075 generated_tokens=128 tokens_per_s=68.2133 throughput_timing=total
+[hf_generate] measure#10 total_s=1.8729 prefill_s=0.0605 decode_s=1.8039 generated_tokens=128 tokens_per_s=68.3423 throughput_timing=total
+
+[hf_generate]
+load_time_s=11.8051
+prompt_tokens=2093
+mean_total_s=1.8769
+p50_total_s=1.8771
+p95_total_s=1.8790
+mean_prefill_s=0.0607
+p50_prefill_s=0.0606
+p95_prefill_s=0.0614
+mean_decode_s=1.8076
+p50_decode_s=1.8077
+p95_decode_s=1.8095
+mean_generated_tokens=128.00
+mean_tokens_per_s=68.1982
+throughput_timing=total

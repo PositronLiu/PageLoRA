@@ -1,0 +1,51 @@
+{
+  "args": {
+    "model": "/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B",
+    "gpu": "0",
+    "output_tokens": 32,
+    "max_model_len": 8192,
+    "output_dir": "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z",
+    "atol": 0.1,
+    "rtol": 0.01,
+    "variants": [
+      "hf",
+      "flashinfer_eager",
+      "flashinfer_graph",
+      "vllm"
+    ],
+    "worker": null,
+    "cases": null,
+    "result": null,
+    "dtype": "float16"
+  },
+  "python": "3.12.4 | packaged by Anaconda, Inc. | (main, Jun 18 2024, 15:12:24) [GCC 11.2.0]",
+  "hardware": {
+    "name": "NVIDIA H800",
+    "capability": [
+      9,
+      0
+    ],
+    "memory_gib": 79.178955078125,
+    "bf16": true,
+    "torch": "2.10.0+cu128",
+    "cuda": "12.8",
+    "dtype": "float16"
+  },
+  "commit": "",
+  "git_error": "fatal: not a git repository (or any parent up to mount point /root)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).",
+  "environment": {
+    "NCCL_SOCKET_IFNAME": "lo",
+    "OMP_NUM_THREADS": "4",
+    "MKL_NUM_THREADS": "4",
+    "VLLM_HOST_IP": "127.0.0.1",
+    "GLOO_SOCKET_IFNAME": "lo",
+    "TRITON_LIBCUDA_PATH": "/usr/lib/x86_64-linux-gnu",
+    "CUDA_VISIBLE_DEVICES": "0",
+    "PAGE_LORA_DTYPE": "float16",
+    "MINI_OPENCLAW_FLASHINFER_PERF_LOG": "1",
+    "MINI_OPENCLAW_FLASHINFER_TORCH_COMPILE": "0",
+    "MINI_OPENCLAW_FLASHINFER_COMPILE_MLP": "0",
+    "MINI_OPENCLAW_FLASHINFER_COMPILE_POST": "0",
+    "VLLM_WORKER_MULTIPROC_METHOD": "spawn"
+  }
+}

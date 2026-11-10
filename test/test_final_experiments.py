@@ -3,14 +3,25 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scripts.check_inference_correctness import validate_coverage
 from scripts.run_final_experiments import build_commands, source_manifest, write_report
 from scripts.hardware_support import choose_dtype
+from scripts.hardware_support import configure_single_gpu_environment
 from scripts.archive_experiments import archive
 
 
 class FinalExperimentTests(unittest.TestCase):
+    def test_runtime_defaults_preserve_explicit_configuration(self):
+        with patch('scripts.hardware_support.Path.exists', return_value=True):
+            env = configure_single_gpu_environment({})
+            self.assertEqual(env['TRITON_LIBCUDA_PATH'], '/usr/lib/x86_64-linux-gnu')
+            self.assertEqual(env['VLLM_HOST_IP'], '127.0.0.1')
+            explicit = {'TRITON_LIBCUDA_PATH': '/custom/cuda', 'VLLM_HOST_IP': '10.0.0.1'}
+            self.assertEqual(configure_single_gpu_environment(explicit)['TRITON_LIBCUDA_PATH'], '/custom/cuda')
+            self.assertEqual(explicit['VLLM_HOST_IP'], '10.0.0.1')
+
     def test_git_archive_keeps_metrics_but_omits_full_logits(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -1,0 +1,99 @@
+[flashinfer-vs-hf-generate]
+model=/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B
+device=cuda:0
+warmup_runs=2
+measure_runs=10
+max_new_tokens=128
+target_prompt_tokens=512
+ignore_eos=True
+sampling_mode=greedy_fast
+compute_logprobs=False
+throughput_timing=total
+benchmark_path=vllm
+adapter_role=base
+flashinfer_cache_policy=cold
+flashinfer_kv_append_mode=manual
+flashinfer_qk_norm=False
+flashinfer_cuda_graph_decode=False
+vllm_enable_prefix_caching=False
+vllm_max_model_len=8192
+vllm_enforce_eager=False
+vllm_enable_lora=False
+vllm_lora_path=
+vllm_lora_name=general
+vllm_lora_id=1
+vllm_max_lora_rank=16
+INFO 11-10 15:28:10 [utils.py:233] non-default args: {'tokenizer': '/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B', 'dtype': 'float16', 'seed': 42, 'max_model_len': 8192, 'enable_prefix_caching': False, 'gpu_memory_utilization': 0.8, 'disable_log_stats': True, 'model': '/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B'}
+INFO 11-10 15:28:10 [model.py:549] Resolved architecture: Qwen2ForCausalLM
+WARNING 11-10 15:28:10 [model.py:2016] Casting torch.bfloat16 to torch.float16.
+INFO 11-10 15:28:10 [model.py:1678] Using max model len 8192
+INFO 11-10 15:28:10 [scheduler.py:238] Chunked prefill is enabled with max_num_batched_tokens=16384.
+INFO 11-10 15:28:10 [vllm.py:790] Asynchronous scheduling is enabled.
+(EngineCore pid=9747) INFO 11-10 15:28:12 [core.py:105] Initializing a V1 LLM engine (v0.19.0) with config: model='/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B', speculative_config=None, tokenizer='/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=8192, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False), seed=42, served_model_name=/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['none'], 'splitting_ops': ['vllm::unified_attention', 'vllm::unified_attention_with_output', 'vllm::unified_mla_attention', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::linear_attention', 'vllm::plamo2_mamba_mixer', 'vllm::gdn_attention_core', 'vllm::olmo_hybrid_gdn_full_forward', 'vllm::kda_attention', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::unified_kv_cache_update', 'vllm::unified_mla_kv_cache_update'], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_images_per_batch': 0, 'compile_sizes': [], 'compile_ranges_endpoints': [16384], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'size_asserts': False, 'alignment_asserts': False, 'scalar_asserts': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.FULL_AND_PIECEWISE: (2, 1)>, 'cudagraph_num_of_warmups': 1, 'cudagraph_capture_sizes': [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': False, 'fuse_act_quant': False, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False}, 'max_cudagraph_capture_size': 512, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': True, 'static_all_moe_layers': []}
+(EngineCore pid=9747) INFO 11-10 15:28:12 [parallel_state.py:1400] world_size=1 rank=0 local_rank=0 distributed_init_method=tcp://127.0.0.1:38921 backend=nccl
+[W1110 15:28:40.256885460 socket.cpp:207] [c10d] The hostname of the client socket cannot be retrieved. err=-3
+(EngineCore pid=9747) INFO 11-10 15:28:40 [parallel_state.py:1716] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank N/A, EPLB rank N/A
+(EngineCore pid=9747) INFO 11-10 15:28:41 [gpu_model_runner.py:4735] Starting to load model /root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B...
+(EngineCore pid=9747) INFO 11-10 15:28:42 [cuda.py:334] Using FLASH_ATTN attention backend out of potential backends: ['FLASH_ATTN', 'FLASHINFER', 'TRITON_ATTN', 'FLEX_ATTENTION'].
+(EngineCore pid=9747) INFO 11-10 15:28:42 [flash_attn.py:596] Using FlashAttention version 3
+(EngineCore pid=9747) <frozen importlib._bootstrap_external>:1297: FutureWarning: The cuda.cudart module is deprecated and will be removed in a future release, please switch to use the cuda.bindings.runtime module instead.
+(EngineCore pid=9747) <frozen importlib._bootstrap_external>:1297: FutureWarning: The cuda.nvrtc module is deprecated and will be removed in a future release, please switch to use the cuda.bindings.nvrtc module instead.
+(EngineCore pid=9747) Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s]
+(EngineCore pid=9747) Loading safetensors checkpoint shards:  50% Completed | 1/2 [00:04<00:04,  4.62s/it]
+(EngineCore pid=9747) Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:08<00:00,  4.07s/it]
+(EngineCore pid=9747) Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:08<00:00,  4.16s/it]
+(EngineCore pid=9747) 
+(EngineCore pid=9747) INFO 11-10 15:28:50 [default_loader.py:384] Loading weights took 8.39 seconds
+(EngineCore pid=9747) INFO 11-10 15:28:51 [gpu_model_runner.py:4820] Model loading took 14.27 GiB memory and 9.044833 seconds
+(EngineCore pid=9747) INFO 11-10 15:28:53 [backends.py:1051] Using cache directory: /root/bayes-tmp/cache/vllm/torch_compile_cache/2acd9a8ab0/rank_0_0/backbone for vLLM's torch.compile
+(EngineCore pid=9747) INFO 11-10 15:28:53 [backends.py:1111] Dynamo bytecode transform time: 1.80 s
+(EngineCore pid=9747) INFO 11-10 15:28:54 [backends.py:285] Directly load the compiled graph(s) for compile range (1, 16384) from the cache, took 1.315 s
+(EngineCore pid=9747) INFO 11-10 15:28:54 [decorators.py:303] Directly load AOT compilation from path /root/bayes-tmp/cache/vllm/torch_compile_cache/torch_aot_compile/c8630daca8638489d7911981e46c674b0687efcc9579d63e659edcca6e180dee/rank_0_0/model
+(EngineCore pid=9747) INFO 11-10 15:28:54 [monitor.py:48] torch.compile took 3.32 s in total
+(EngineCore pid=9747) INFO 11-10 15:28:54 [monitor.py:76] Initial profiling/warmup run took 0.12 s
+(EngineCore pid=9747) INFO 11-10 15:28:55 [kv_cache_utils.py:829] Overriding num_gpu_blocks=0 with num_gpu_blocks_override=512
+(EngineCore pid=9747) INFO 11-10 15:28:55 [gpu_model_runner.py:5876] Profiling CUDA graph memory: PIECEWISE=51 (largest=512), FULL=51 (largest=512)
+(EngineCore pid=9747) INFO 11-10 15:28:56 [gpu_model_runner.py:5955] Estimated CUDA graph memory: 0.51 GiB total
+(EngineCore pid=9747) INFO 11-10 15:28:56 [gpu_worker.py:436] Available KV cache memory: 46.58 GiB
+(EngineCore pid=9747) INFO 11-10 15:28:56 [gpu_worker.py:470] In v0.19, CUDA graph memory profiling will be enabled by default (VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1), which more accurately accounts for CUDA graph memory during KV cache allocation. To try it now, set VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1 and increase --gpu-memory-utilization from 0.8000 to 0.8065 to maintain the same effective KV cache size.
+(EngineCore pid=9747) INFO 11-10 15:28:56 [kv_cache_utils.py:1319] GPU KV cache size: 872,128 tokens
+(EngineCore pid=9747) INFO 11-10 15:28:56 [kv_cache_utils.py:1324] Maximum concurrency for 8,192 tokens per request: 106.46x
+(EngineCore pid=9747) 2026-11-10 15:28:56,583 - INFO - autotuner.py:262 - flashinfer.jit: [Autotuner]: Autotuning process starts ...
+(EngineCore pid=9747) 2026-11-10 15:28:56,592 - INFO - autotuner.py:268 - flashinfer.jit: [Autotuner]: Autotuning process ends
+(EngineCore pid=9747) Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   0%|          | 0/51 [00:00<?, ?it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   8%|▊         | 4/51 [00:00<00:01, 28.43it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  14%|█▎        | 7/51 [00:00<00:01, 24.25it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  20%|█▉        | 10/51 [00:00<00:01, 25.04it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  25%|██▌       | 13/51 [00:00<00:01, 25.02it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  31%|███▏      | 16/51 [00:00<00:01, 25.74it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  37%|███▋      | 19/51 [00:00<00:01, 26.73it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  43%|████▎     | 22/51 [00:00<00:01, 27.59it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  49%|████▉     | 25/51 [00:00<00:00, 27.70it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  55%|█████▍    | 28/51 [00:01<00:00, 27.96it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  61%|██████    | 31/51 [00:01<00:00, 27.58it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  67%|██████▋   | 34/51 [00:01<00:00, 27.99it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  73%|███████▎  | 37/51 [00:01<00:00, 27.69it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  78%|███████▊  | 40/51 [00:01<00:00, 27.17it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  84%|████████▍ | 43/51 [00:01<00:00, 27.58it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  90%|█████████ | 46/51 [00:01<00:00, 25.58it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  96%|█████████▌| 49/51 [00:01<00:00, 25.89it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 100%|██████████| 51/51 [00:01<00:00, 26.72it/s]
+(EngineCore pid=9747) Capturing CUDA graphs (decode, FULL):   0%|          | 0/51 [00:00<?, ?it/s]Capturing CUDA graphs (decode, FULL):   8%|▊         | 4/51 [00:00<00:01, 35.68it/s]Capturing CUDA graphs (decode, FULL):  16%|█▌        | 8/51 [00:00<00:01, 36.56it/s]Capturing CUDA graphs (decode, FULL):  24%|██▎       | 12/51 [00:00<00:01, 37.98it/s]Capturing CUDA graphs (decode, FULL):  35%|███▌      | 18/51 [00:00<00:00, 43.55it/s]Capturing CUDA graphs (decode, FULL):  47%|████▋     | 24/51 [00:00<00:00, 47.08it/s]Capturing CUDA graphs (decode, FULL):  59%|█████▉    | 30/51 [00:00<00:00, 50.11it/s]Capturing CUDA graphs (decode, FULL):  71%|███████   | 36/51 [00:00<00:00, 51.44it/s]Capturing CUDA graphs (decode, FULL):  82%|████████▏ | 42/51 [00:00<00:00, 51.76it/s]Capturing CUDA graphs (decode, FULL):  94%|█████████▍| 48/51 [00:00<00:00, 53.21it/s]Capturing CUDA graphs (decode, FULL): 100%|██████████| 51/51 [00:01<00:00, 48.92it/s]
+(EngineCore pid=9747) INFO 11-10 15:29:00 [gpu_model_runner.py:6046] Graph capturing finished in 4 secs, took 0.60 GiB
+(EngineCore pid=9747) INFO 11-10 15:29:00 [gpu_worker.py:597] CUDA graph pool memory: 0.6 GiB (actual), 0.51 GiB (estimated), difference: 0.09 GiB (14.4%).
+(EngineCore pid=9747) INFO 11-10 15:29:00 [core.py:283] init engine (profile, create kv cache, warmup model) took 9.03 seconds
+
+[vllm_generate] prompt_tokens=529 prompt_chars=2804
+[vllm_generate] warmup#1 total_s=0.8124 prefill_s=0.0000 decode_s=0.8124 generated_tokens=128 tokens_per_s=157.5606 throughput_timing=total
+[vllm_generate] warmup#2 total_s=0.7586 prefill_s=0.0000 decode_s=0.7586 generated_tokens=128 tokens_per_s=168.7416 throughput_timing=total
+[vllm_generate] measure#1 total_s=0.7570 prefill_s=0.0000 decode_s=0.7570 generated_tokens=128 tokens_per_s=169.0944 throughput_timing=total
+[vllm_generate] measure#2 total_s=0.7602 prefill_s=0.0000 decode_s=0.7602 generated_tokens=128 tokens_per_s=168.3795 throughput_timing=total
+[vllm_generate] measure#3 total_s=0.7572 prefill_s=0.0000 decode_s=0.7572 generated_tokens=128 tokens_per_s=169.0539 throughput_timing=total
+[vllm_generate] measure#4 total_s=0.7563 prefill_s=0.0000 decode_s=0.7563 generated_tokens=128 tokens_per_s=169.2557 throughput_timing=total
+[vllm_generate] measure#5 total_s=0.7577 prefill_s=0.0000 decode_s=0.7577 generated_tokens=128 tokens_per_s=168.9287 throughput_timing=total
+[vllm_generate] measure#6 total_s=0.7595 prefill_s=0.0000 decode_s=0.7595 generated_tokens=128 tokens_per_s=168.5286 throughput_timing=total
+[vllm_generate] measure#7 total_s=0.7591 prefill_s=0.0000 decode_s=0.7591 generated_tokens=128 tokens_per_s=168.6205 throughput_timing=total
+[vllm_generate] measure#8 total_s=0.7582 prefill_s=0.0000 decode_s=0.7582 generated_tokens=128 tokens_per_s=168.8236 throughput_timing=total
+[vllm_generate] measure#9 total_s=0.7571 prefill_s=0.0000 decode_s=0.7571 generated_tokens=128 tokens_per_s=169.0571 throughput_timing=total
+[vllm_generate] measure#10 total_s=0.7574 prefill_s=0.0000 decode_s=0.7574 generated_tokens=128 tokens_per_s=168.9899 throughput_timing=total
+(EngineCore pid=9747) INFO 11-10 15:29:09 [core.py:1210] Shutdown initiated (timeout=0)
+(EngineCore pid=9747) INFO 11-10 15:29:09 [core.py:1233] Shutdown complete
+
+[vllm_generate]
+load_time_s=53.2144
+prompt_tokens=529
+mean_total_s=0.7580
+p50_total_s=0.7576
+p95_total_s=0.7599
+mean_prefill_s=0.0000
+p50_prefill_s=0.0000
+p95_prefill_s=0.0000
+mean_decode_s=0.7580
+p50_decode_s=0.7576
+p95_decode_s=0.7599
+mean_generated_tokens=128.00
+mean_tokens_per_s=168.8732
+throughput_timing=total

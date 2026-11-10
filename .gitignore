@@ -10,4 +10,5 @@ models/
 checkpoints/
 outputs/
 course_results/
+raw_results/
 !experiment_results/**/*.log

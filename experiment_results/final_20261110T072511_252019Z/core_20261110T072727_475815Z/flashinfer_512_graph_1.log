@@ -1,0 +1,207 @@
+[flashinfer-vs-hf-generate]
+model=/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B
+device=cuda:0
+warmup_runs=2
+measure_runs=10
+max_new_tokens=128
+target_prompt_tokens=512
+ignore_eos=True
+sampling_mode=greedy_fast
+compute_logprobs=False
+throughput_timing=total
+benchmark_path=flashinfer
+adapter_role=base
+flashinfer_cache_policy=cold
+flashinfer_kv_append_mode=manual
+flashinfer_qk_norm=False
+flashinfer_cuda_graph_decode=True
+vllm_enable_prefix_caching=False
+vllm_max_model_len=default
+vllm_enforce_eager=False
+vllm_enable_lora=False
+vllm_lora_path=
+vllm_lora_name=general
+vllm_lora_id=1
+vllm_max_lora_rank=16
+[LOG 2026-11-10 07:29:53 UTC] ModelManager init model=/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B device=cuda:0 dtype=torch.float16 cpu_offload=False enable_multilora=True kvcache_mode=flashinfer kvcache_decompose=False
+[LOG 2026-11-10 07:29:54 UTC] Tokenizer loaded
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:03<00:03,  3.40s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:06<00:00,  3.01s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:06<00:00,  3.07s/it]
+[LOG 2026-11-10 07:30:06 UTC] Base model loaded
+[LOG 2026-11-10 07:30:06 UTC] Enabled input require grads for checkpointed training
+[LOG 2026-11-10 07:30:06 UTC] Manual LoRA ready active=general lora_tensors_gpu=0
+[LOG 2026-11-10 07:30:06 UTC] FlashInferPagedKVCacheManager initialized layers=28
+
+[flashinfer_paged_kv] prompt_tokens=529 prompt_chars=2804
+[LOG 2026-11-10 07:30:07 UTC] FlashInfer paged prefill: 529 tokens (cache_start=0)
+[LOG 2026-11-10 07:30:07 UTC] FlashInfer CUDA graph decode enabled cached=0
+[LOG 2026-11-10 07:30:07 UTC] FlashInfer decode wrapper: tensor_cores=True use_cuda_graph=True batch=1 index_capacity=32 backend=fa2
+[LOG 2026-11-10 07:30:07 UTC] FlashInfer CUDA graph decode captured count=1 pages=17 cache_pages=17 cached=1
+[LOG 2026-11-10 07:30:07 UTC] FlashInfer CUDA graph decode captured count=2 pages=18 cache_pages=34 cached=2
+[LOG 2026-11-10 07:30:07 UTC] FlashInfer CUDA graph decode captured count=3 pages=19 cache_pages=34 cached=3
+[LOG 2026-11-10 07:30:07 UTC] FlashInfer CUDA graph decode captured count=4 pages=20 cache_pages=34 cached=4
+[LOG 2026-11-10 07:30:08 UTC] FlashInfer CUDA graph decode captured count=5 pages=21 cache_pages=34 cached=5
+[LOG 2026-11-10 07:30:08 UTC] [flashinfer_perf] summary prompt_tokens=529 prefill_tokens=529 generated=128 cached_generated=127 total_s=1.2407 decode_s=1.0166 decode_tokens_per_s=125.9087 perf_sync_cuda=0
+[LOG 2026-11-10 07:30:08 UTC] [flashinfer_perf] sections backend_create_s=0.007986 begin_request_s=0.000048 prefill_total_s=0.206658 prefill_input_s=0.005289 prefill_reserve_s=0.000071 prefill_plan_s=0.025668 prefill_layers_s=0.175623 prefill_final_norm_s=0.000052 prefill_lm_head_project_s=0.002431 prefill_lm_head_s=0.002491 decode_total_s=1.016610 decode_sample_s=0.005987 decode_embed_s=0.000000 decode_reserve_s=0.000785 decode_plan_s=0.822046 decode_cuda_graph_s=0.184866 decode_layers_s=0.000000 decode_final_norm_s=0.000000 decode_lm_head_project_s=0.000000 decode_lm_head_s=0.000000 commit_s=0.000164 decode_text_s=0.000233
+[LOG 2026-11-10 07:30:08 UTC] [flashinfer_perf] kvcache manager_begin_request_s=0.000044 manager_radix_lookup_s=0.000016 manager_usable_prefix_s=0.000001 manager_prefix_span_slice_s=0.000005 manager_reserve_chunk_s=0.000719 manager_build_page_table_s=0.783791 manager_append_full_s=0.003580 manager_commit_request_s=0.000157 manager_radix_insert_coverage_s=0.000083 store_reserve_spans_s=0.000462 store_write_layer_s=0.003486 store_piece_slice_s=0.000118 store_page_metadata_s=0.000151 store_dense_write_s=0.002160 store_flashinfer_append_s=0.000000 store_dense_realloc_s=0.000481 manager_build_page_table_calls=128 manager_append_full_calls=3584 store_write_layer_calls=28 store_flashinfer_append_calls=0 store_dense_realloc_count=2 manager_allocated_pages=21 store_dense_capacity_pages=34 request_spans=21 request_page_chunks=128
+[LOG 2026-11-10 07:30:08 UTC] [flashinfer_perf] prefill_layers total_s=0.175162 qkv_s=0.099917 input_norm_s=0.017981 qkv_project_s=0.081908 rope_s=0.020353 kv_append_s=0.003670 layer_cache_s=0.000097 attn_run_s=0.007932 post_s=0.043099 compiled_post_s=0.000000 o_layout_s=0.000372 o_proj_s=0.006021 post_residual_s=0.004479 post_norm_s=0.001011 compiled_mlp_s=0.000000 mlp_gate_up_s=0.015747 mlp_act_s=0.011559 mlp_down_s=0.003365 mlp_s=0.000000 post_final_residual_s=0.000410 top_total=0:0.142659/1,6:0.001450/1,1:0.001428/1,3:0.001277/1,2:0.001272/1
+[LOG 2026-11-10 07:30:08 UTC] FlashInfer paged generation: 128 tokens in 1.02s
+[flashinfer_paged_kv] warmup#1 total_s=1.2598 prefill_s=0.2172 decode_s=1.0166 generated_tokens=128 tokens_per_s=101.6055 throughput_timing=total
+[LOG 2026-11-10 07:30:08 UTC] FlashInfer paged prefill: 529 tokens (cache_start=0)
+[LOG 2026-11-10 07:30:08 UTC] FlashInfer CUDA graph decode enabled cached=5
+[LOG 2026-11-10 07:30:08 UTC] FlashInfer CUDA graph decode captured count=6 pages=17 cache_pages=21 cached=6
+[LOG 2026-11-10 07:30:08 UTC] FlashInfer CUDA graph decode captured count=7 pages=18 cache_pages=21 cached=7
+[LOG 2026-11-10 07:30:08 UTC] FlashInfer CUDA graph decode captured count=8 pages=19 cache_pages=21 cached=8
+[LOG 2026-11-10 07:30:08 UTC] FlashInfer CUDA graph decode captured count=9 pages=20 cache_pages=21 cached=9
+[LOG 2026-11-10 07:30:09 UTC] FlashInfer CUDA graph decode captured count=10 pages=21 cache_pages=21 cached=10
+[LOG 2026-11-10 07:30:09 UTC] [flashinfer_perf] summary prompt_tokens=529 prefill_tokens=529 generated=128 cached_generated=127 total_s=0.9780 decode_s=0.9430 decode_tokens_per_s=135.7377 perf_sync_cuda=0
+[LOG 2026-11-10 07:30:09 UTC] [flashinfer_perf] sections backend_create_s=0.000011 begin_request_s=0.000098 prefill_total_s=0.027925 prefill_input_s=0.000182 prefill_reserve_s=0.000042 prefill_plan_s=0.000373 prefill_layers_s=0.027324 prefill_final_norm_s=0.000037 prefill_lm_head_project_s=0.000037 prefill_lm_head_s=0.000077 decode_total_s=0.942995 decode_sample_s=0.003400 decode_embed_s=0.000000 decode_reserve_s=0.000783 decode_plan_s=0.801409 decode_cuda_graph_s=0.134120 decode_layers_s=0.000000 decode_final_norm_s=0.000000 decode_lm_head_project_s=0.000000 decode_lm_head_s=0.000000 commit_s=0.000256 decode_text_s=0.000308
+[LOG 2026-11-10 07:30:09 UTC] [flashinfer_perf] kvcache manager_begin_request_s=0.000096 manager_radix_lookup_s=0.000078 manager_usable_prefix_s=0.000001 manager_prefix_span_slice_s=0.000002 manager_reserve_chunk_s=0.000690 manager_build_page_table_s=0.784290 manager_append_full_s=0.012651 manager_commit_request_s=0.000248 manager_radix_insert_coverage_s=0.000208 store_reserve_spans_s=0.000440 store_write_layer_s=0.012581 store_piece_slice_s=0.001879 store_page_metadata_s=0.000143 store_dense_write_s=0.009686 store_flashinfer_append_s=0.000000 store_dense_realloc_s=0.000011 manager_build_page_table_calls=128 manager_append_full_calls=3584 store_write_layer_calls=28 store_flashinfer_append_calls=0 store_dense_realloc_count=1 manager_allocated_pages=21 store_dense_capacity_pages=21 request_spans=21 request_page_chunks=128
+[LOG 2026-11-10 07:30:09 UTC] [flashinfer_perf] prefill_layers total_s=0.027005 qkv_s=0.003194 input_norm_s=0.000734 qkv_project_s=0.002438 rope_s=0.002393 kv_append_s=0.012719 layer_cache_s=0.000085 attn_run_s=0.002410 post_s=0.006136 compiled_post_s=0.000000 o_layout_s=0.000356 o_proj_s=0.001090 post_residual_s=0.000255 post_norm_s=0.000787 compiled_mlp_s=0.000000 mlp_gate_up_s=0.001820 mlp_act_s=0.000685 mlp_down_s=0.000811 mlp_s=0.000000 post_final_residual_s=0.000231 top_total=0:0.001667/1,1:0.001057/1,10:0.000971/1,2:0.000970/1,3:0.000968/1
+[LOG 2026-11-10 07:30:09 UTC] FlashInfer paged generation: 128 tokens in 0.95s
+[flashinfer_paged_kv] warmup#2 total_s=0.9871 prefill_s=0.0281 decode_s=0.9430 generated_tokens=128 tokens_per_s=129.6748 throughput_timing=total
+[LOG 2026-11-10 07:30:09 UTC] FlashInfer paged prefill: 529 tokens (cache_start=0)
+[LOG 2026-11-10 07:30:09 UTC] FlashInfer CUDA graph decode enabled cached=10
+[LOG 2026-11-10 07:30:09 UTC] FlashInfer CUDA graph decode captured count=11 pages=17 cache_pages=21 cached=11
+[LOG 2026-11-10 07:30:09 UTC] FlashInfer CUDA graph decode captured count=12 pages=18 cache_pages=21 cached=12
+[LOG 2026-11-10 07:30:09 UTC] FlashInfer CUDA graph decode captured count=13 pages=19 cache_pages=21 cached=13
+[LOG 2026-11-10 07:30:09 UTC] FlashInfer CUDA graph decode captured count=14 pages=20 cache_pages=21 cached=14
+[LOG 2026-11-10 07:30:10 UTC] FlashInfer CUDA graph decode captured count=15 pages=21 cache_pages=21 cached=15
+[LOG 2026-11-10 07:30:10 UTC] [flashinfer_perf] summary prompt_tokens=529 prefill_tokens=529 generated=128 cached_generated=127 total_s=1.1099 decode_s=1.0753 decode_tokens_per_s=119.0367 perf_sync_cuda=0
+[LOG 2026-11-10 07:30:10 UTC] [flashinfer_perf] sections backend_create_s=0.000009 begin_request_s=0.000090 prefill_total_s=0.027739 prefill_input_s=0.000189 prefill_reserve_s=0.000038 prefill_plan_s=0.000363 prefill_layers_s=0.027147 prefill_final_norm_s=0.000033 prefill_lm_head_project_s=0.000033 prefill_lm_head_s=0.000075 decode_total_s=1.075299 decode_sample_s=0.003347 decode_embed_s=0.000000 decode_reserve_s=0.000761 decode_plan_s=0.930713 decode_cuda_graph_s=0.137197 decode_layers_s=0.000000 decode_final_norm_s=0.000000 decode_lm_head_project_s=0.000000 decode_lm_head_s=0.000000 commit_s=0.000224 decode_text_s=0.000113
+[LOG 2026-11-10 07:30:10 UTC] [flashinfer_perf] kvcache manager_begin_request_s=0.000088 manager_radix_lookup_s=0.000073 manager_usable_prefix_s=0.000001 manager_prefix_span_slice_s=0.000002 manager_reserve_chunk_s=0.000670 manager_build_page_table_s=0.783996 manager_append_full_s=0.012593 manager_commit_request_s=0.000219 manager_radix_insert_coverage_s=0.000188 store_reserve_spans_s=0.000423 store_write_layer_s=0.012524 store_piece_slice_s=0.001889 store_page_metadata_s=0.000144 store_dense_write_s=0.009635 store_flashinfer_append_s=0.000000 store_dense_realloc_s=0.000010 manager_build_page_table_calls=128 manager_append_full_calls=3584 store_write_layer_calls=28 store_flashinfer_append_calls=0 store_dense_realloc_count=1 manager_allocated_pages=21 store_dense_capacity_pages=21 request_spans=21 request_page_chunks=128
+[LOG 2026-11-10 07:30:10 UTC] [flashinfer_perf] prefill_layers total_s=0.026834 qkv_s=0.003104 input_norm_s=0.000709 qkv_project_s=0.002372 rope_s=0.002410 kv_append_s=0.012660 layer_cache_s=0.000083 attn_run_s=0.002469 post_s=0.006042 compiled_post_s=0.000000 o_layout_s=0.000350 o_proj_s=0.001069 post_residual_s=0.000248 post_norm_s=0.000792 compiled_mlp_s=0.000000 mlp_gate_up_s=0.001796 mlp_act_s=0.000668 mlp_down_s=0.000792 mlp_s=0.000000 post_final_residual_s=0.000227 top_total=0:0.001669/1,1:0.001064/1,2:0.001057/1,9:0.000964/1,3:0.000944/1
+[LOG 2026-11-10 07:30:10 UTC] FlashInfer paged generation: 128 tokens in 1.08s
+[flashinfer_paged_kv] measure#1 total_s=1.1189 prefill_s=0.0279 decode_s=1.0753 generated_tokens=128 tokens_per_s=114.3948 throughput_timing=total
+[LOG 2026-11-10 07:30:10 UTC] FlashInfer paged prefill: 529 tokens (cache_start=0)
+[LOG 2026-11-10 07:30:10 UTC] FlashInfer CUDA graph decode enabled cached=15
+[LOG 2026-11-10 07:30:10 UTC] FlashInfer CUDA graph decode captured count=16 pages=17 cache_pages=21 cached=16
+[LOG 2026-11-10 07:30:10 UTC] FlashInfer CUDA graph decode captured count=17 pages=18 cache_pages=21 cached=17
+[LOG 2026-11-10 07:30:10 UTC] FlashInfer CUDA graph decode captured count=18 pages=19 cache_pages=21 cached=18
+[LOG 2026-11-10 07:30:11 UTC] FlashInfer CUDA graph decode captured count=19 pages=20 cache_pages=21 cached=19
+[LOG 2026-11-10 07:30:11 UTC] FlashInfer CUDA graph decode captured count=20 pages=21 cache_pages=21 cached=20
+[LOG 2026-11-10 07:30:11 UTC] [flashinfer_perf] summary prompt_tokens=529 prefill_tokens=529 generated=128 cached_generated=127 total_s=0.9755 decode_s=0.9409 decode_tokens_per_s=136.0433 perf_sync_cuda=0
+[LOG 2026-11-10 07:30:11 UTC] [flashinfer_perf] sections backend_create_s=0.000007 begin_request_s=0.000087 prefill_total_s=0.027734 prefill_input_s=0.000181 prefill_reserve_s=0.000038 prefill_plan_s=0.000361 prefill_layers_s=0.027151 prefill_final_norm_s=0.000033 prefill_lm_head_project_s=0.000033 prefill_lm_head_s=0.000070 decode_total_s=0.940877 decode_sample_s=0.003210 decode_embed_s=0.000000 decode_reserve_s=0.000744 decode_plan_s=0.799941 decode_cuda_graph_s=0.133822 decode_layers_s=0.000000 decode_final_norm_s=0.000000 decode_lm_head_project_s=0.000000 decode_lm_head_s=0.000000 commit_s=0.000221 decode_text_s=0.000113
+[LOG 2026-11-10 07:30:11 UTC] [flashinfer_perf] kvcache manager_begin_request_s=0.000085 manager_radix_lookup_s=0.000071 manager_usable_prefix_s=0.000001 manager_prefix_span_slice_s=0.000001 manager_reserve_chunk_s=0.000655 manager_build_page_table_s=0.784414 manager_append_full_s=0.012601 manager_commit_request_s=0.000216 manager_radix_insert_coverage_s=0.000184 store_reserve_spans_s=0.000414 store_write_layer_s=0.012533 store_piece_slice_s=0.001873 store_page_metadata_s=0.000135 store_dense_write_s=0.009661 store_flashinfer_append_s=0.000000 store_dense_realloc_s=0.000011 manager_build_page_table_calls=128 manager_append_full_calls=3584 store_write_layer_calls=28 store_flashinfer_append_calls=0 store_dense_realloc_count=1 manager_allocated_pages=21 store_dense_capacity_pages=21 request_spans=21 request_page_chunks=128
+[LOG 2026-11-10 07:30:11 UTC] [flashinfer_perf] prefill_layers total_s=0.026838 qkv_s=0.003131 input_norm_s=0.000717 qkv_project_s=0.002392 rope_s=0.002414 kv_append_s=0.012668 layer_cache_s=0.000084 attn_run_s=0.002381 post_s=0.006095 compiled_post_s=0.000000 o_layout_s=0.000348 o_proj_s=0.001076 post_residual_s=0.000249 post_norm_s=0.000789 compiled_mlp_s=0.000000 mlp_gate_up_s=0.001828 mlp_act_s=0.000669 mlp_down_s=0.000796 mlp_s=0.000000 post_final_residual_s=0.000238 top_total=0:0.001703/1,1:0.001065/1,2:0.000978/1,5:0.000957/1,3:0.000952/1
+[LOG 2026-11-10 07:30:11 UTC] FlashInfer paged generation: 128 tokens in 0.95s
+[flashinfer_paged_kv] measure#2 total_s=0.9845 prefill_s=0.0279 decode_s=0.9409 generated_tokens=128 tokens_per_s=130.0156 throughput_timing=total
+[LOG 2026-11-10 07:30:11 UTC] FlashInfer paged prefill: 529 tokens (cache_start=0)
+[LOG 2026-11-10 07:30:11 UTC] FlashInfer CUDA graph decode enabled cached=20
+[LOG 2026-11-10 07:30:11 UTC] FlashInfer CUDA graph decode captured count=21 pages=17 cache_pages=21 cached=21
+[LOG 2026-11-10 07:30:11 UTC] FlashInfer CUDA graph decode captured count=22 pages=18 cache_pages=21 cached=22
+[LOG 2026-11-10 07:30:11 UTC] FlashInfer CUDA graph decode captured count=23 pages=19 cache_pages=21 cached=23
+[LOG 2026-11-10 07:30:11 UTC] FlashInfer CUDA graph decode captured count=24 pages=20 cache_pages=21 cached=24
+[LOG 2026-11-10 07:30:12 UTC] FlashInfer CUDA graph decode captured count=25 pages=21 cache_pages=21 cached=25
+[LOG 2026-11-10 07:30:12 UTC] [flashinfer_perf] summary prompt_tokens=529 prefill_tokens=529 generated=128 cached_generated=127 total_s=0.9748 decode_s=0.9403 decode_tokens_per_s=136.1257 perf_sync_cuda=0
+[LOG 2026-11-10 07:30:12 UTC] [flashinfer_perf] sections backend_create_s=0.000007 begin_request_s=0.000087 prefill_total_s=0.027670 prefill_input_s=0.000180 prefill_reserve_s=0.000038 prefill_plan_s=0.000364 prefill_layers_s=0.027086 prefill_final_norm_s=0.000034 prefill_lm_head_project_s=0.000035 prefill_lm_head_s=0.000072 decode_total_s=0.940307 decode_sample_s=0.003217 decode_embed_s=0.000000 decode_reserve_s=0.000748 decode_plan_s=0.799532 decode_cuda_graph_s=0.133634 decode_layers_s=0.000000 decode_final_norm_s=0.000000 decode_lm_head_project_s=0.000000 decode_lm_head_s=0.000000 commit_s=0.000220 decode_text_s=0.000113
+[LOG 2026-11-10 07:30:12 UTC] [flashinfer_perf] kvcache manager_begin_request_s=0.000085 manager_radix_lookup_s=0.000071 manager_usable_prefix_s=0.000001 manager_prefix_span_slice_s=0.000002 manager_reserve_chunk_s=0.000659 manager_build_page_table_s=0.783898 manager_append_full_s=0.012643 manager_commit_request_s=0.000215 manager_radix_insert_coverage_s=0.000183 store_reserve_spans_s=0.000422 store_write_layer_s=0.012574 store_piece_slice_s=0.001902 store_page_metadata_s=0.000139 store_dense_write_s=0.009657 store_flashinfer_append_s=0.000000 store_dense_realloc_s=0.000010 manager_build_page_table_calls=128 manager_append_full_calls=3584 store_write_layer_calls=28 store_flashinfer_append_calls=0 store_dense_realloc_count=1 manager_allocated_pages=21 store_dense_capacity_pages=21 request_spans=21 request_page_chunks=128
+[LOG 2026-11-10 07:30:12 UTC] [flashinfer_perf] prefill_layers total_s=0.026773 qkv_s=0.003095 input_norm_s=0.000709 qkv_project_s=0.002364 rope_s=0.002414 kv_append_s=0.012712 layer_cache_s=0.000084 attn_run_s=0.002361 post_s=0.006039 compiled_post_s=0.000000 o_layout_s=0.000349 o_proj_s=0.001055 post_residual_s=0.000250 post_norm_s=0.000787 compiled_mlp_s=0.000000 mlp_gate_up_s=0.001800 mlp_act_s=0.000674 mlp_down_s=0.000797 mlp_s=0.000000 post_final_residual_s=0.000228 top_total=0:0.001667/1,1:0.001051/1,2:0.000966/1,12:0.000945/1,3:0.000945/1
+[LOG 2026-11-10 07:30:12 UTC] FlashInfer paged generation: 128 tokens in 0.95s
+[flashinfer_paged_kv] measure#3 total_s=0.9839 prefill_s=0.0278 decode_s=0.9403 generated_tokens=128 tokens_per_s=130.1009 throughput_timing=total
+[LOG 2026-11-10 07:30:12 UTC] FlashInfer paged prefill: 529 tokens (cache_start=0)
+[LOG 2026-11-10 07:30:12 UTC] FlashInfer CUDA graph decode enabled cached=25
+[LOG 2026-11-10 07:30:12 UTC] FlashInfer CUDA graph decode captured count=26 pages=17 cache_pages=21 cached=26
+[LOG 2026-11-10 07:30:12 UTC] FlashInfer CUDA graph decode captured count=27 pages=18 cache_pages=21 cached=27
+[LOG 2026-11-10 07:30:12 UTC] FlashInfer CUDA graph decode captured count=28 pages=19 cache_pages=21 cached=28
+[LOG 2026-11-10 07:30:12 UTC] FlashInfer CUDA graph decode captured count=29 pages=20 cache_pages=21 cached=29
+[LOG 2026-11-10 07:30:13 UTC] FlashInfer CUDA graph decode captured count=30 pages=21 cache_pages=21 cached=30
+[LOG 2026-11-10 07:30:13 UTC] [flashinfer_perf] summary prompt_tokens=529 prefill_tokens=529 generated=128 cached_generated=127 total_s=0.9776 decode_s=0.9429 decode_tokens_per_s=135.7516 perf_sync_cuda=0
+[LOG 2026-11-10 07:30:13 UTC] [flashinfer_perf] sections backend_create_s=0.000007 begin_request_s=0.000086 prefill_total_s=0.027809 prefill_input_s=0.000181 prefill_reserve_s=0.000039 prefill_plan_s=0.000359 prefill_layers_s=0.027227 prefill_final_norm_s=0.000033 prefill_lm_head_project_s=0.000033 prefill_lm_head_s=0.000070 decode_total_s=0.942898 decode_sample_s=0.003228 decode_embed_s=0.000000 decode_reserve_s=0.000744 decode_plan_s=0.800004 decode_cuda_graph_s=0.135714 decode_layers_s=0.000000 decode_final_norm_s=0.000000 decode_lm_head_project_s=0.000000 decode_lm_head_s=0.000000 commit_s=0.000238 decode_text_s=0.000119
+[LOG 2026-11-10 07:30:13 UTC] [flashinfer_perf] kvcache manager_begin_request_s=0.000084 manager_radix_lookup_s=0.000070 manager_usable_prefix_s=0.000001 manager_prefix_span_slice_s=0.000002 manager_reserve_chunk_s=0.000656 manager_build_page_table_s=0.784349 manager_append_full_s=0.012664 manager_commit_request_s=0.000233 manager_radix_insert_coverage_s=0.000200 store_reserve_spans_s=0.000416 store_write_layer_s=0.012593 store_piece_slice_s=0.001879 store_page_metadata_s=0.000137 store_dense_write_s=0.009701 store_flashinfer_append_s=0.000000 store_dense_realloc_s=0.000011 manager_build_page_table_calls=128 manager_append_full_calls=3584 store_write_layer_calls=28 store_flashinfer_append_calls=0 store_dense_realloc_count=1 manager_allocated_pages=21 store_dense_capacity_pages=21 request_spans=21 request_page_chunks=128
+[LOG 2026-11-10 07:30:13 UTC] [flashinfer_perf] prefill_layers total_s=0.026912 qkv_s=0.003148 input_norm_s=0.000716 qkv_project_s=0.002411 rope_s=0.002402 kv_append_s=0.012734 layer_cache_s=0.000084 attn_run_s=0.002392 post_s=0.006083 compiled_post_s=0.000000 o_layout_s=0.000349 o_proj_s=0.001084 post_residual_s=0.000250 post_norm_s=0.000798 compiled_mlp_s=0.000000 mlp_gate_up_s=0.001799 mlp_act_s=0.000673 mlp_down_s=0.000800 mlp_s=0.000000 post_final_residual_s=0.000230 top_total=0:0.001673/1,1:0.001047/1,2:0.000966/1,4:0.000956/1,3:0.000952/1
+[LOG 2026-11-10 07:30:13 UTC] FlashInfer paged generation: 128 tokens in 0.95s
+[flashinfer_paged_kv] measure#4 total_s=0.9865 prefill_s=0.0280 decode_s=0.9429 generated_tokens=128 tokens_per_s=129.7483 throughput_timing=total
+[LOG 2026-11-10 07:30:13 UTC] FlashInfer paged prefill: 529 tokens (cache_start=0)
+[LOG 2026-11-10 07:30:13 UTC] FlashInfer CUDA graph decode enabled cached=30
+[LOG 2026-11-10 07:30:13 UTC] FlashInfer CUDA graph decode captured count=31 pages=17 cache_pages=21 cached=31
+[LOG 2026-11-10 07:30:13 UTC] FlashInfer CUDA graph decode captured count=32 pages=18 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:13 UTC] FlashInfer CUDA graph decode captured count=33 pages=19 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:13 UTC] FlashInfer CUDA graph decode captured count=34 pages=20 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:14 UTC] FlashInfer CUDA graph decode captured count=35 pages=21 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:14 UTC] [flashinfer_perf] summary prompt_tokens=529 prefill_tokens=529 generated=128 cached_generated=127 total_s=0.9790 decode_s=0.9444 decode_tokens_per_s=135.5378 perf_sync_cuda=0
+[LOG 2026-11-10 07:30:14 UTC] [flashinfer_perf] sections backend_create_s=0.000007 begin_request_s=0.000087 prefill_total_s=0.027765 prefill_input_s=0.000177 prefill_reserve_s=0.000038 prefill_plan_s=0.000360 prefill_layers_s=0.027186 prefill_final_norm_s=0.000033 prefill_lm_head_project_s=0.000033 prefill_lm_head_s=0.000070 decode_total_s=0.944386 decode_sample_s=0.003266 decode_embed_s=0.000000 decode_reserve_s=0.000759 decode_plan_s=0.799810 decode_cuda_graph_s=0.137307 decode_layers_s=0.000000 decode_final_norm_s=0.000000 decode_lm_head_project_s=0.000000 decode_lm_head_s=0.000000 commit_s=0.000223 decode_text_s=0.000110
+[LOG 2026-11-10 07:30:14 UTC] [flashinfer_perf] kvcache manager_begin_request_s=0.000086 manager_radix_lookup_s=0.000072 manager_usable_prefix_s=0.000001 manager_prefix_span_slice_s=0.000002 manager_reserve_chunk_s=0.000668 manager_build_page_table_s=0.783945 manager_append_full_s=0.012653 manager_commit_request_s=0.000218 manager_radix_insert_coverage_s=0.000186 store_reserve_spans_s=0.000423 store_write_layer_s=0.012585 store_piece_slice_s=0.001894 store_page_metadata_s=0.000141 store_dense_write_s=0.009695 store_flashinfer_append_s=0.000000 store_dense_realloc_s=0.000010 manager_build_page_table_calls=128 manager_append_full_calls=3584 store_write_layer_calls=28 store_flashinfer_append_calls=0 store_dense_realloc_count=1 manager_allocated_pages=21 store_dense_capacity_pages=21 request_spans=21 request_page_chunks=128
+[LOG 2026-11-10 07:30:14 UTC] [flashinfer_perf] prefill_layers total_s=0.026865 qkv_s=0.003118 input_norm_s=0.000711 qkv_project_s=0.002385 rope_s=0.002400 kv_append_s=0.012719 layer_cache_s=0.000083 attn_run_s=0.002389 post_s=0.006089 compiled_post_s=0.000000 o_layout_s=0.000349 o_proj_s=0.001056 post_residual_s=0.000250 post_norm_s=0.000796 compiled_mlp_s=0.000000 mlp_gate_up_s=0.001839 mlp_act_s=0.000671 mlp_down_s=0.000796 mlp_s=0.000000 post_final_residual_s=0.000232 top_total=0:0.001685/1,1:0.001050/1,2:0.000970/1,4:0.000966/1,17:0.000951/1
+[LOG 2026-11-10 07:30:14 UTC] FlashInfer paged generation: 128 tokens in 0.95s
+[flashinfer_paged_kv] measure#5 total_s=0.9879 prefill_s=0.0279 decode_s=0.9444 generated_tokens=128 tokens_per_s=129.5613 throughput_timing=total
+[LOG 2026-11-10 07:30:14 UTC] FlashInfer paged prefill: 529 tokens (cache_start=0)
+[LOG 2026-11-10 07:30:14 UTC] FlashInfer CUDA graph decode enabled cached=32
+[LOG 2026-11-10 07:30:14 UTC] FlashInfer CUDA graph decode captured count=36 pages=17 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:14 UTC] FlashInfer CUDA graph decode captured count=37 pages=18 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:14 UTC] FlashInfer CUDA graph decode captured count=38 pages=19 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:14 UTC] FlashInfer CUDA graph decode captured count=39 pages=20 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:15 UTC] FlashInfer CUDA graph decode captured count=40 pages=21 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:15 UTC] [flashinfer_perf] summary prompt_tokens=529 prefill_tokens=529 generated=128 cached_generated=127 total_s=0.9788 decode_s=0.9442 decode_tokens_per_s=135.5601 perf_sync_cuda=0
+[LOG 2026-11-10 07:30:15 UTC] [flashinfer_perf] sections backend_create_s=0.000007 begin_request_s=0.000089 prefill_total_s=0.027713 prefill_input_s=0.000184 prefill_reserve_s=0.000038 prefill_plan_s=0.000377 prefill_layers_s=0.027110 prefill_final_norm_s=0.000035 prefill_lm_head_project_s=0.000035 prefill_lm_head_s=0.000074 decode_total_s=0.944231 decode_sample_s=0.003211 decode_embed_s=0.000000 decode_reserve_s=0.000743 decode_plan_s=0.799760 decode_cuda_graph_s=0.137305 decode_layers_s=0.000000 decode_final_norm_s=0.000000 decode_lm_head_project_s=0.000000 decode_lm_head_s=0.000000 commit_s=0.000228 decode_text_s=0.000118
+[LOG 2026-11-10 07:30:15 UTC] [flashinfer_perf] kvcache manager_begin_request_s=0.000087 manager_radix_lookup_s=0.000073 manager_usable_prefix_s=0.000001 manager_prefix_span_slice_s=0.000002 manager_reserve_chunk_s=0.000654 manager_build_page_table_s=0.784081 manager_append_full_s=0.012598 manager_commit_request_s=0.000223 manager_radix_insert_coverage_s=0.000190 store_reserve_spans_s=0.000412 store_write_layer_s=0.012529 store_piece_slice_s=0.001883 store_page_metadata_s=0.000137 store_dense_write_s=0.009643 store_flashinfer_append_s=0.000000 store_dense_realloc_s=0.000011 manager_build_page_table_calls=128 manager_append_full_calls=3584 store_write_layer_calls=28 store_flashinfer_append_calls=0 store_dense_realloc_count=1 manager_allocated_pages=21 store_dense_capacity_pages=21 request_spans=21 request_page_chunks=128
+[LOG 2026-11-10 07:30:15 UTC] [flashinfer_perf] prefill_layers total_s=0.026795 qkv_s=0.003087 input_norm_s=0.000712 qkv_project_s=0.002352 rope_s=0.002409 kv_append_s=0.012667 layer_cache_s=0.000096 attn_run_s=0.002388 post_s=0.006082 compiled_post_s=0.000000 o_layout_s=0.000350 o_proj_s=0.001066 post_residual_s=0.000252 post_norm_s=0.000793 compiled_mlp_s=0.000000 mlp_gate_up_s=0.001822 mlp_act_s=0.000671 mlp_down_s=0.000798 mlp_s=0.000000 post_final_residual_s=0.000229 top_total=0:0.001698/1,1:0.001064/1,2:0.000965/1,8:0.000948/1,5:0.000945/1
+[LOG 2026-11-10 07:30:15 UTC] FlashInfer paged generation: 128 tokens in 0.95s
+[flashinfer_paged_kv] measure#6 total_s=0.9880 prefill_s=0.0279 decode_s=0.9442 generated_tokens=128 tokens_per_s=129.5605 throughput_timing=total
+[LOG 2026-11-10 07:30:15 UTC] FlashInfer paged prefill: 529 tokens (cache_start=0)
+[LOG 2026-11-10 07:30:15 UTC] FlashInfer CUDA graph decode enabled cached=32
+[LOG 2026-11-10 07:30:15 UTC] FlashInfer CUDA graph decode captured count=41 pages=17 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:15 UTC] FlashInfer CUDA graph decode captured count=42 pages=18 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:15 UTC] FlashInfer CUDA graph decode captured count=43 pages=19 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:15 UTC] FlashInfer CUDA graph decode captured count=44 pages=20 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:16 UTC] FlashInfer CUDA graph decode captured count=45 pages=21 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:16 UTC] [flashinfer_perf] summary prompt_tokens=529 prefill_tokens=529 generated=128 cached_generated=127 total_s=0.9835 decode_s=0.9461 decode_tokens_per_s=135.2860 perf_sync_cuda=0
+[LOG 2026-11-10 07:30:16 UTC] [flashinfer_perf] sections backend_create_s=0.000008 begin_request_s=0.000091 prefill_total_s=0.030466 prefill_input_s=0.000176 prefill_reserve_s=0.000038 prefill_plan_s=0.000380 prefill_layers_s=0.029868 prefill_final_norm_s=0.000037 prefill_lm_head_project_s=0.000070 prefill_lm_head_s=0.000110 decode_total_s=0.946144 decode_sample_s=0.003278 decode_embed_s=0.000000 decode_reserve_s=0.000753 decode_plan_s=0.799766 decode_cuda_graph_s=0.139166 decode_layers_s=0.000000 decode_final_norm_s=0.000000 decode_lm_head_project_s=0.000000 decode_lm_head_s=0.000000 commit_s=0.000226 decode_text_s=0.000117
+[LOG 2026-11-10 07:30:16 UTC] [flashinfer_perf] kvcache manager_begin_request_s=0.000090 manager_radix_lookup_s=0.000076 manager_usable_prefix_s=0.000001 manager_prefix_span_slice_s=0.000002 manager_reserve_chunk_s=0.000663 manager_build_page_table_s=0.783973 manager_append_full_s=0.012835 manager_commit_request_s=0.000221 manager_radix_insert_coverage_s=0.000185 store_reserve_spans_s=0.000422 store_write_layer_s=0.012767 store_piece_slice_s=0.001885 store_page_metadata_s=0.000142 store_dense_write_s=0.009855 store_flashinfer_append_s=0.000000 store_dense_realloc_s=0.000011 manager_build_page_table_calls=128 manager_append_full_calls=3584 store_write_layer_calls=28 store_flashinfer_append_calls=0 store_dense_realloc_count=1 manager_allocated_pages=21 store_dense_capacity_pages=21 request_spans=21 request_page_chunks=128
+[LOG 2026-11-10 07:30:16 UTC] [flashinfer_perf] prefill_layers total_s=0.029522 qkv_s=0.003224 input_norm_s=0.000737 qkv_project_s=0.002465 rope_s=0.002447 kv_append_s=0.012905 layer_cache_s=0.000085 attn_run_s=0.002458 post_s=0.008334 compiled_post_s=0.000000 o_layout_s=0.000348 o_proj_s=0.001093 post_residual_s=0.000251 post_norm_s=0.000803 compiled_mlp_s=0.000000 mlp_gate_up_s=0.001871 mlp_act_s=0.000695 mlp_down_s=0.002913 mlp_s=0.000000 post_final_residual_s=0.000259 top_total=25:0.003049/1,0:0.001692/1,26:0.001237/1,1:0.001067/1,27:0.001018/1
+[LOG 2026-11-10 07:30:16 UTC] FlashInfer paged generation: 128 tokens in 0.95s
+[flashinfer_paged_kv] measure#7 total_s=0.9927 prefill_s=0.0307 decode_s=0.9461 generated_tokens=128 tokens_per_s=128.9451 throughput_timing=total
+[LOG 2026-11-10 07:30:16 UTC] FlashInfer paged prefill: 529 tokens (cache_start=0)
+[LOG 2026-11-10 07:30:16 UTC] FlashInfer CUDA graph decode enabled cached=32
+[LOG 2026-11-10 07:30:16 UTC] FlashInfer CUDA graph decode captured count=46 pages=17 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:16 UTC] FlashInfer CUDA graph decode captured count=47 pages=18 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:16 UTC] FlashInfer CUDA graph decode captured count=48 pages=19 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:16 UTC] FlashInfer CUDA graph decode captured count=49 pages=20 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:17 UTC] FlashInfer CUDA graph decode captured count=50 pages=21 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:17 UTC] [flashinfer_perf] summary prompt_tokens=529 prefill_tokens=529 generated=128 cached_generated=127 total_s=0.9916 decode_s=0.9518 decode_tokens_per_s=134.4778 perf_sync_cuda=0
+[LOG 2026-11-10 07:30:17 UTC] [flashinfer_perf] sections backend_create_s=0.000009 begin_request_s=0.000092 prefill_total_s=0.032956 prefill_input_s=0.000186 prefill_reserve_s=0.000039 prefill_plan_s=0.000406 prefill_layers_s=0.032322 prefill_final_norm_s=0.000035 prefill_lm_head_project_s=0.000037 prefill_lm_head_s=0.000075 decode_total_s=0.951830 decode_sample_s=0.003282 decode_embed_s=0.000000 decode_reserve_s=0.000763 decode_plan_s=0.800392 decode_cuda_graph_s=0.144157 decode_layers_s=0.000000 decode_final_norm_s=0.000000 decode_lm_head_project_s=0.000000 decode_lm_head_s=0.000000 commit_s=0.000224 decode_text_s=0.000114
+[LOG 2026-11-10 07:30:17 UTC] [flashinfer_perf] kvcache manager_begin_request_s=0.000090 manager_radix_lookup_s=0.000076 manager_usable_prefix_s=0.000001 manager_prefix_span_slice_s=0.000002 manager_reserve_chunk_s=0.000672 manager_build_page_table_s=0.784491 manager_append_full_s=0.012637 manager_commit_request_s=0.000219 manager_radix_insert_coverage_s=0.000186 store_reserve_spans_s=0.000428 store_write_layer_s=0.012569 store_piece_slice_s=0.001874 store_page_metadata_s=0.000141 store_dense_write_s=0.009686 store_flashinfer_append_s=0.000000 store_dense_realloc_s=0.000011 manager_build_page_table_calls=128 manager_append_full_calls=3584 store_write_layer_calls=28 store_flashinfer_append_calls=0 store_dense_realloc_count=1 manager_allocated_pages=21 store_dense_capacity_pages=21 request_spans=21 request_page_chunks=128
+[LOG 2026-11-10 07:30:17 UTC] [flashinfer_perf] prefill_layers total_s=0.032006 qkv_s=0.003168 input_norm_s=0.000729 qkv_project_s=0.002418 rope_s=0.004935 kv_append_s=0.012703 layer_cache_s=0.000084 attn_run_s=0.002438 post_s=0.008610 compiled_post_s=0.000000 o_layout_s=0.000351 o_proj_s=0.001058 post_residual_s=0.000249 post_norm_s=0.000790 compiled_mlp_s=0.000000 mlp_gate_up_s=0.004344 mlp_act_s=0.000677 mlp_down_s=0.000809 mlp_s=0.000000 post_final_residual_s=0.000233 top_total=0:0.006786/1,1:0.001080/1,2:0.001000/1,5:0.000953/1,15:0.000952/1
+[LOG 2026-11-10 07:30:17 UTC] FlashInfer paged generation: 128 tokens in 0.96s
+[flashinfer_paged_kv] measure#8 total_s=1.0008 prefill_s=0.0331 decode_s=0.9518 generated_tokens=128 tokens_per_s=127.8958 throughput_timing=total
+[LOG 2026-11-10 07:30:17 UTC] FlashInfer paged prefill: 529 tokens (cache_start=0)
+[LOG 2026-11-10 07:30:17 UTC] FlashInfer CUDA graph decode enabled cached=32
+[LOG 2026-11-10 07:30:17 UTC] FlashInfer CUDA graph decode captured count=51 pages=17 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:17 UTC] FlashInfer CUDA graph decode captured count=52 pages=18 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:17 UTC] FlashInfer CUDA graph decode captured count=53 pages=19 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:17 UTC] FlashInfer CUDA graph decode captured count=54 pages=20 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:18 UTC] FlashInfer CUDA graph decode captured count=55 pages=21 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:18 UTC] [flashinfer_perf] summary prompt_tokens=529 prefill_tokens=529 generated=128 cached_generated=127 total_s=0.9822 decode_s=0.9474 decode_tokens_per_s=135.1014 perf_sync_cuda=0
+[LOG 2026-11-10 07:30:18 UTC] [flashinfer_perf] sections backend_create_s=0.000008 begin_request_s=0.000091 prefill_total_s=0.027865 prefill_input_s=0.000186 prefill_reserve_s=0.000041 prefill_plan_s=0.000434 prefill_layers_s=0.027201 prefill_final_norm_s=0.000035 prefill_lm_head_project_s=0.000035 prefill_lm_head_s=0.000074 decode_total_s=0.947437 decode_sample_s=0.003223 decode_embed_s=0.000000 decode_reserve_s=0.000754 decode_plan_s=0.799619 decode_cuda_graph_s=0.140628 decode_layers_s=0.000000 decode_final_norm_s=0.000000 decode_lm_head_project_s=0.000000 decode_lm_head_s=0.000000 commit_s=0.000222 decode_text_s=0.000120
+[LOG 2026-11-10 07:30:18 UTC] [flashinfer_perf] kvcache manager_begin_request_s=0.000089 manager_radix_lookup_s=0.000075 manager_usable_prefix_s=0.000001 manager_prefix_span_slice_s=0.000002 manager_reserve_chunk_s=0.000665 manager_build_page_table_s=0.783965 manager_append_full_s=0.012638 manager_commit_request_s=0.000217 manager_radix_insert_coverage_s=0.000184 store_reserve_spans_s=0.000421 store_write_layer_s=0.012570 store_piece_slice_s=0.001881 store_page_metadata_s=0.000146 store_dense_write_s=0.009669 store_flashinfer_append_s=0.000000 store_dense_realloc_s=0.000011 manager_build_page_table_calls=128 manager_append_full_calls=3584 store_write_layer_calls=28 store_flashinfer_append_calls=0 store_dense_realloc_count=1 manager_allocated_pages=21 store_dense_capacity_pages=21 request_spans=21 request_page_chunks=128
+[LOG 2026-11-10 07:30:18 UTC] [flashinfer_perf] prefill_layers total_s=0.026883 qkv_s=0.003157 input_norm_s=0.000721 qkv_project_s=0.002415 rope_s=0.002417 kv_append_s=0.012708 layer_cache_s=0.000085 attn_run_s=0.002391 post_s=0.006058 compiled_post_s=0.000000 o_layout_s=0.000349 o_proj_s=0.001059 post_residual_s=0.000247 post_norm_s=0.000795 compiled_mlp_s=0.000000 mlp_gate_up_s=0.001809 mlp_act_s=0.000676 mlp_down_s=0.000794 mlp_s=0.000000 post_final_residual_s=0.000229 top_total=0:0.001712/1,1:0.001062/1,2:0.000975/1,3:0.000953/1,12:0.000945/1
+[LOG 2026-11-10 07:30:18 UTC] FlashInfer paged generation: 128 tokens in 0.95s
+[flashinfer_paged_kv] measure#9 total_s=0.9912 prefill_s=0.0280 decode_s=0.9474 generated_tokens=128 tokens_per_s=129.1407 throughput_timing=total
+[LOG 2026-11-10 07:30:18 UTC] FlashInfer paged prefill: 529 tokens (cache_start=0)
+[LOG 2026-11-10 07:30:18 UTC] FlashInfer CUDA graph decode enabled cached=32
+[LOG 2026-11-10 07:30:18 UTC] FlashInfer CUDA graph decode captured count=56 pages=17 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:18 UTC] FlashInfer CUDA graph decode captured count=57 pages=18 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:18 UTC] FlashInfer CUDA graph decode captured count=58 pages=19 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:18 UTC] FlashInfer CUDA graph decode captured count=59 pages=20 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:19 UTC] FlashInfer CUDA graph decode captured count=60 pages=21 cache_pages=21 cached=32
+[LOG 2026-11-10 07:30:19 UTC] [flashinfer_perf] summary prompt_tokens=529 prefill_tokens=529 generated=128 cached_generated=127 total_s=0.9867 decode_s=0.9519 decode_tokens_per_s=134.4710 perf_sync_cuda=0
+[LOG 2026-11-10 07:30:19 UTC] [flashinfer_perf] sections backend_create_s=0.000008 begin_request_s=0.000090 prefill_total_s=0.027907 prefill_input_s=0.000176 prefill_reserve_s=0.000040 prefill_plan_s=0.000388 prefill_layers_s=0.027300 prefill_final_norm_s=0.000036 prefill_lm_head_project_s=0.000034 prefill_lm_head_s=0.000073 decode_total_s=0.951878 decode_sample_s=0.003272 decode_embed_s=0.000000 decode_reserve_s=0.000751 decode_plan_s=0.800094 decode_cuda_graph_s=0.144552 decode_layers_s=0.000000 decode_final_norm_s=0.000000 decode_lm_head_project_s=0.000000 decode_lm_head_s=0.000000 commit_s=0.000302 decode_text_s=0.000123
+[LOG 2026-11-10 07:30:19 UTC] [flashinfer_perf] kvcache manager_begin_request_s=0.000088 manager_radix_lookup_s=0.000074 manager_usable_prefix_s=0.000001 manager_prefix_span_slice_s=0.000002 manager_reserve_chunk_s=0.000664 manager_build_page_table_s=0.784337 manager_append_full_s=0.012645 manager_commit_request_s=0.000297 manager_radix_insert_coverage_s=0.000264 store_reserve_spans_s=0.000422 store_write_layer_s=0.012576 store_piece_slice_s=0.001887 store_page_metadata_s=0.000138 store_dense_write_s=0.009676 store_flashinfer_append_s=0.000000 store_dense_realloc_s=0.000011 manager_build_page_table_calls=128 manager_append_full_calls=3584 store_write_layer_calls=28 store_flashinfer_append_calls=0 store_dense_realloc_count=1 manager_allocated_pages=21 store_dense_capacity_pages=21 request_spans=21 request_page_chunks=128
+[LOG 2026-11-10 07:30:19 UTC] [flashinfer_perf] prefill_layers total_s=0.026973 qkv_s=0.003120 input_norm_s=0.000720 qkv_project_s=0.002378 rope_s=0.002410 kv_append_s=0.012714 layer_cache_s=0.000085 attn_run_s=0.002415 post_s=0.006160 compiled_post_s=0.000000 o_layout_s=0.000350 o_proj_s=0.001094 post_residual_s=0.000252 post_norm_s=0.000804 compiled_mlp_s=0.000000 mlp_gate_up_s=0.001829 mlp_act_s=0.000687 mlp_down_s=0.000808 mlp_s=0.000000 post_final_residual_s=0.000236 top_total=0:0.001694/1,1:0.001062/1,2:0.000967/1,4:0.000957/1,20:0.000956/1
+[LOG 2026-11-10 07:30:19 UTC] FlashInfer paged generation: 128 tokens in 0.96s
+[flashinfer_paged_kv] measure#10 total_s=0.9958 prefill_s=0.0281 decode_s=0.9519 generated_tokens=128 tokens_per_s=128.5399 throughput_timing=total
+
+[flashinfer_paged_kv]
+load_time_s=14.8646
+prompt_tokens=529
+mean_total_s=1.0030
+p50_total_s=0.9896
+p95_total_s=1.0658
+mean_prefill_s=0.0287
+p50_prefill_s=0.0280
+p95_prefill_s=0.0320
+mean_decode_s=0.9585
+p50_decode_s=0.9453
+p95_decode_s=1.0198
+mean_generated_tokens=128.00
+mean_tokens_per_s=127.7903
+throughput_timing=total

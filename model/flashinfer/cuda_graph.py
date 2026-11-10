@@ -279,7 +279,7 @@ class FlashInferDecodeCudaGraphRunner:
         page_indptr_ptr, page_indices_ptr, page_last_len_ptr = self.cache_mgr.page_table_buffer_signature()
         return DecodeGraphKey(
             model_id=id(self.manager.model),
-            backend_id=id(self.backend),
+            backend_id=hash((id(self.backend), self.backend.decode_graph_signature())),
             cache_data_ptr=int(cache.data_ptr()),
             cache_shape=tuple(int(dim) for dim in cache.shape),
             cache_dtype=cache.dtype,
@@ -515,7 +515,7 @@ class FlashInferBatchDecodeCudaGraphRunner:
         page_indptr_ptr, page_indices_ptr, page_last_len_ptr = self.cache_mgr.batch_page_table_buffer_signature()
         return DecodeGraphKey(
             model_id=id(self.manager.model),
-            backend_id=id(self.backend),
+            backend_id=hash((id(self.backend), self.backend.decode_graph_signature())),
             cache_data_ptr=int(cache.data_ptr()),
             cache_shape=tuple(int(dim) for dim in cache.shape),
             cache_dtype=cache.dtype,

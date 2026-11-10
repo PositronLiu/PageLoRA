@@ -33,6 +33,7 @@ class _StrictDecodeWrapper(_FakeWrapper):
         pos_encoding_mode="NONE",
         q_data_type="float16",
         kv_data_type=None,
+        sm_scale=None,
     ) -> None:
         self.plan_kwargs = {
             "indptr": indptr,
@@ -45,6 +46,7 @@ class _StrictDecodeWrapper(_FakeWrapper):
             "pos_encoding_mode": pos_encoding_mode,
             "q_data_type": q_data_type,
             "kv_data_type": kv_data_type,
+            "sm_scale": sm_scale,
         }
 
 
@@ -66,6 +68,7 @@ class _StrictPrefillWrapper(_FakeWrapper):
         pos_encoding_mode="NONE",
         q_data_type="float16",
         kv_data_type=None,
+        sm_scale=None,
     ) -> None:
         self.plan_kwargs = {
             "qo_indptr": qo_indptr,
@@ -83,6 +86,7 @@ class _StrictPrefillWrapper(_FakeWrapper):
             "pos_encoding_mode": pos_encoding_mode,
             "q_data_type": q_data_type,
             "kv_data_type": kv_data_type,
+            "sm_scale": sm_scale,
         }
 
 
@@ -103,6 +107,74 @@ def _backend_class(monkeypatch):
         decode_wrapper=_FakeWrapper,
         prefill_wrapper=_FakeWrapper,
     )
+
+
+def test_qwen_group_seven_selects_tensor_core_decode(monkeypatch):
+    class TensorCoreWrapper(_FakeWrapper):
+        def __init__(self, workspace_buffer, kv_layout="NHD", use_tensor_cores=False):
+            super().__init__(workspace_buffer, kv_layout)
+            assert use_tensor_cores, 'group_size=7 cannot use the CUDA-core decode kernel'
+
+    backend_cls = _backend_class_for(monkeypatch, decode_wrapper=TensorCoreWrapper,
+                                     prefill_wrapper=_FakeWrapper)
+    backend = backend_cls(device=torch.device('cpu'), workspace_mb=1,
+                          num_qo_heads=28, num_kv_heads=4, head_dim=128, page_size=32)
+    assert backend.decode_use_tensor_cores
+
+
+
+def test_decode_plan_buffers_survive_replanning_and_resize(monkeypatch):
+    class GraphWrapper(_FakeWrapper):
+        def __init__(self, workspace_buffer, kv_layout='NHD', **kwargs):
+            super().__init__(workspace_buffer, kv_layout)
+            self.options = kwargs
+            self._plan_info = [1, 2]
+
+    backend_cls = _backend_class_for(monkeypatch, decode_wrapper=GraphWrapper,
+                                     prefill_wrapper=_FakeWrapper)
+    backend = backend_cls(device=torch.device('cpu'), workspace_mb=1,
+                          num_qo_heads=28, num_kv_heads=4, head_dim=128, page_size=32)
+    # Exercise allocation/lifetime policy on CPU without a CUDA runtime.
+    backend.device = SimpleNamespace(type='cuda')
+    original_empty = torch.empty
+    monkeypatch.setattr(torch, 'empty', lambda *a, **kw: original_empty(*a, **dict(kw, device='cpu')))
+    indptr = torch.tensor([0, 1], dtype=torch.int32)
+    indices = torch.tensor([0], dtype=torch.int32)
+    last = torch.tensor([1], dtype=torch.int32)
+    backend._ensure_graph_safe_decode_buffers(indptr, indices, last)
+    wrapper = backend._decode_wrapper
+    signature = backend.decode_graph_signature()
+    assert wrapper.options['use_cuda_graph']
+    assert wrapper.options['backend'] == 'fa2'
+    backend._ensure_graph_safe_decode_buffers(indptr, indices, last)
+    assert backend._decode_wrapper is wrapper
+    wrapper._plan_info = [1, 3]
+    assert signature != backend.decode_graph_signature()
+    backend._ensure_graph_safe_decode_buffers(indptr, torch.zeros(17, dtype=torch.int32), last)
+    assert backend._decode_wrapper is not wrapper
+
+
+def test_query_rescaling_prevents_finite_mask_from_winning(monkeypatch):
+    class FiniteMaskWrapper(_FakeWrapper):
+        def run(self, q, kv):
+            k, v = kv
+            scores = q[:, 0].float() @ k[:, 0].float().T
+            scores.masked_fill_(torch.ones_like(scores, dtype=torch.bool).triu(1), -50000.)
+            return ((scores * self.plan_kwargs['sm_scale']).softmax(-1) @ v[:, 0].float()).unsqueeze(1)
+
+    backend_cls = _backend_class_for(monkeypatch, decode_wrapper=_FakeWrapper,
+                                     prefill_wrapper=FiniteMaskWrapper)
+    backend = backend_cls(device=torch.device('cpu'), workspace_mb=1,
+                          num_qo_heads=1, num_kv_heads=1, head_dim=1, page_size=2)
+    backend.plan_prefill(qo_indptr=torch.tensor([0, 2]), paged_kv_indptr=torch.tensor([0, 1]),
+        paged_kv_indices=torch.tensor([0]), paged_kv_last_page_len=torch.tensor([2]))
+    q = torch.full((2, 1, 1), -1000.)
+    kv = (torch.full((2, 1, 1), 100.), torch.tensor([1., 9.]).reshape(2, 1, 1))
+    result = backend.run_prefill(q, kv)
+    assert torch.allclose(result[:, 0, 0], torch.tensor([1., 5.]))
+    # Without rescaling, the masked second position beats the real first score.
+    backend._prefill_wrapper.plan_kwargs['sm_scale'] = 1.
+    assert backend._prefill_wrapper.run(q, kv)[0, 0, 0] == 9.
 
 
 def test_flashinfer_decode_wrapper_is_initialized_eagerly(monkeypatch):

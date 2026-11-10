@@ -1,0 +1,440 @@
+{
+  "strict_pass": true,
+  "coverage_errors": [],
+  "checks": [
+    {
+      "variant": "flashinfer_eager",
+      "case": "prefix_31",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true,
+      "first_logits": {
+        "available": true,
+        "allclose": true,
+        "max_abs_error": 0.04296875,
+        "rmse": 0.008957764399658131,
+        "argmax_equal": true,
+        "reference_top1_top2_margin": 11.140625,
+        "atol": 0.1,
+        "rtol": 0.01
+      },
+      "cache_reuse": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "reuse_match_tokens": 31,
+      "reuse_exercised": true
+    },
+    {
+      "variant": "flashinfer_eager",
+      "case": "prefix_32",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true,
+      "first_logits": {
+        "available": true,
+        "allclose": true,
+        "max_abs_error": 0.03271484375,
+        "rmse": 0.006791681412079467,
+        "argmax_equal": true,
+        "reference_top1_top2_margin": 1.421875,
+        "atol": 0.1,
+        "rtol": 0.01
+      },
+      "cache_reuse": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "reuse_match_tokens": 32,
+      "reuse_exercised": true
+    },
+    {
+      "variant": "flashinfer_eager",
+      "case": "prefix_33",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true,
+      "first_logits": {
+        "available": true,
+        "allclose": true,
+        "max_abs_error": 0.02734375,
+        "rmse": 0.005430909145395828,
+        "argmax_equal": true,
+        "reference_top1_top2_margin": 0.390625,
+        "atol": 0.1,
+        "rtol": 0.01
+      },
+      "cache_reuse": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "reuse_match_tokens": 33,
+      "reuse_exercised": true
+    },
+    {
+      "variant": "flashinfer_eager",
+      "case": "prefix_129",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true,
+      "first_logits": {
+        "available": true,
+        "allclose": true,
+        "max_abs_error": 0.0751953125,
+        "rmse": 0.012654920210938577,
+        "argmax_equal": true,
+        "reference_top1_top2_margin": 10.03125,
+        "atol": 0.1,
+        "rtol": 0.01
+      },
+      "cache_reuse": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "reuse_match_tokens": 129,
+      "reuse_exercised": true
+    },
+    {
+      "variant": "flashinfer_graph",
+      "case": "prefix_31",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true,
+      "first_logits": {
+        "available": true,
+        "allclose": true,
+        "max_abs_error": 0.04296875,
+        "rmse": 0.008957764399658131,
+        "argmax_equal": true,
+        "reference_top1_top2_margin": 11.140625,
+        "atol": 0.1,
+        "rtol": 0.01
+      },
+      "cache_reuse": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "reuse_match_tokens": 31,
+      "reuse_exercised": true,
+      "graph_successful_replays": 62,
+      "graph_exercised": true,
+      "graph_disabled_reason": null
+    },
+    {
+      "variant": "flashinfer_graph",
+      "case": "prefix_32",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true,
+      "first_logits": {
+        "available": true,
+        "allclose": true,
+        "max_abs_error": 0.03271484375,
+        "rmse": 0.006791681412079467,
+        "argmax_equal": true,
+        "reference_top1_top2_margin": 1.421875,
+        "atol": 0.1,
+        "rtol": 0.01
+      },
+      "cache_reuse": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "reuse_match_tokens": 32,
+      "reuse_exercised": true,
+      "graph_successful_replays": 62,
+      "graph_exercised": true,
+      "graph_disabled_reason": null
+    },
+    {
+      "variant": "flashinfer_graph",
+      "case": "prefix_33",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true,
+      "first_logits": {
+        "available": true,
+        "allclose": true,
+        "max_abs_error": 0.02734375,
+        "rmse": 0.005430909145395828,
+        "argmax_equal": true,
+        "reference_top1_top2_margin": 0.390625,
+        "atol": 0.1,
+        "rtol": 0.01
+      },
+      "cache_reuse": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "reuse_match_tokens": 33,
+      "reuse_exercised": true,
+      "graph_successful_replays": 62,
+      "graph_exercised": true,
+      "graph_disabled_reason": null
+    },
+    {
+      "variant": "flashinfer_graph",
+      "case": "prefix_129",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true,
+      "first_logits": {
+        "available": true,
+        "allclose": true,
+        "max_abs_error": 0.0751953125,
+        "rmse": 0.012654920210938577,
+        "argmax_equal": true,
+        "reference_top1_top2_margin": 10.03125,
+        "atol": 0.1,
+        "rtol": 0.01
+      },
+      "cache_reuse": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "reuse_match_tokens": 129,
+      "reuse_exercised": true,
+      "graph_successful_replays": 62,
+      "graph_exercised": true,
+      "graph_disabled_reason": null
+    },
+    {
+      "variant": "vllm",
+      "case": "prefix_31",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true
+    },
+    {
+      "variant": "vllm",
+      "case": "prefix_32",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true
+    },
+    {
+      "variant": "vllm",
+      "case": "prefix_33",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true
+    },
+    {
+      "variant": "vllm",
+      "case": "prefix_129",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true
+    },
+    {
+      "variant": "graph_vs_eager",
+      "case": "prefix_31",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true
+    },
+    {
+      "variant": "graph_vs_eager",
+      "case": "prefix_32",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true
+    },
+    {
+      "variant": "graph_vs_eager",
+      "case": "prefix_33",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true
+    },
+    {
+      "variant": "graph_vs_eager",
+      "case": "prefix_129",
+      "sequence": {
+        "equal": true,
+        "first_difference": null,
+        "reference_length": 32,
+        "candidate_length": 32
+      },
+      "fixed_output_length": true
+    }
+  ],
+  "runs": [
+    {
+      "variant": "hf",
+      "returncode": 0,
+      "command": [
+        "/opt/conda/bin/python",
+        "-m",
+        "scripts.check_inference_correctness",
+        "--model",
+        "/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B",
+        "--worker",
+        "hf",
+        "--dtype",
+        "float16",
+        "--cases",
+        "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/cases.json",
+        "--result",
+        "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/hf.json",
+        "--output-tokens",
+        "32",
+        "--max-model-len",
+        "8192"
+      ]
+    },
+    {
+      "variant": "flashinfer_eager",
+      "returncode": 0,
+      "command": [
+        "/opt/conda/bin/python",
+        "-m",
+        "scripts.check_inference_correctness",
+        "--model",
+        "/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B",
+        "--worker",
+        "flashinfer_eager",
+        "--dtype",
+        "float16",
+        "--cases",
+        "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/cases.json",
+        "--result",
+        "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/flashinfer_eager.json",
+        "--output-tokens",
+        "32",
+        "--max-model-len",
+        "8192"
+      ]
+    },
+    {
+      "variant": "flashinfer_graph",
+      "returncode": 0,
+      "command": [
+        "/opt/conda/bin/python",
+        "-m",
+        "scripts.check_inference_correctness",
+        "--model",
+        "/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B",
+        "--worker",
+        "flashinfer_graph",
+        "--dtype",
+        "float16",
+        "--cases",
+        "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/cases.json",
+        "--result",
+        "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/flashinfer_graph.json",
+        "--output-tokens",
+        "32",
+        "--max-model-len",
+        "8192"
+      ]
+    },
+    {
+      "variant": "vllm",
+      "returncode": 0,
+      "command": [
+        "/opt/conda/bin/python",
+        "-m",
+        "scripts.check_inference_correctness",
+        "--model",
+        "/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B",
+        "--worker",
+        "vllm",
+        "--dtype",
+        "float16",
+        "--cases",
+        "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/cases.json",
+        "--result",
+        "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/vllm.json",
+        "--output-tokens",
+        "32",
+        "--max-model-len",
+        "8192"
+      ]
+    }
+  ],
+  "limitations": [
+    "vLLM compares greedy token IDs only, not full logits.",
+    "First-step logits cover prefill; later steps compare sequences, not teacher-forced logits.",
+    "A mismatch requires inspecting first divergence and floating-point margins; it alone does not prove a bug.",
+    "These cases cover repeated prompts and page boundaries, not concurrent serving or OOM recovery.",
+    "Graph validation requires a nonzero count of successful runner replays.",
+    "Logits tolerances default to atol=0.1, rtol=0.01; these are screening settings, not universal error bounds."
+  ]
+}

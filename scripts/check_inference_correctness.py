@@ -201,13 +201,15 @@ def main():
     cases_path=destination/'cases.json'
     cases_path.write_text(json.dumps(cases),encoding='utf-8')
     env=os.environ.copy()
+    from scripts.hardware_support import configure_single_gpu_environment
+    configure_single_gpu_environment(env)
     env.update(CUDA_VISIBLE_DEVICES=args.gpu,PAGE_LORA_DTYPE=args.dtype,MINI_OPENCLAW_FLASHINFER_PERF_LOG='1',
                MINI_OPENCLAW_FLASHINFER_TORCH_COMPILE='0', MINI_OPENCLAW_FLASHINFER_COMPILE_MLP='0',
                MINI_OPENCLAW_FLASHINFER_COMPILE_POST='0',VLLM_WORKER_MULTIPROC_METHOD='spawn')
     revision=subprocess.run(['git','rev-parse','HEAD'],cwd=ROOT,capture_output=True,text=True)
     (destination/'metadata.json').write_text(json.dumps({'args':vars(args),'python':sys.version,
         'hardware':hardware,'commit':revision.stdout.strip(),'git_error':revision.stderr.strip(),
-        'environment':{k:v for k,v in env.items() if k.startswith(('CUDA_','MINI_OPENCLAW_','VLLM_'))}},indent=2),encoding='utf-8')
+        'environment':{k:v for k,v in env.items() if k.startswith(('CUDA_','MINI_OPENCLAW_','PAGE_LORA_','TRITON_','VLLM_','GLOO_','NCCL_','OMP_','MKL_'))}},indent=2),encoding='utf-8')
     outcomes=[]; reports={}
     for variant in dict.fromkeys(args.variants):
         result=destination/f'{variant}.json'

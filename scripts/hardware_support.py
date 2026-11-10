@@ -3,6 +3,17 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
+
+
+def configure_single_gpu_environment(env):
+    """Configure local-only workers without modifying the host networking."""
+    env.setdefault('VLLM_HOST_IP', '127.0.0.1')
+    if Path('/sys/class/net/lo').exists():
+        env.setdefault('GLOO_SOCKET_IFNAME', 'lo')
+    if Path('/usr/lib/x86_64-linux-gnu/libcuda.so.1').exists():
+        env.setdefault('TRITON_LIBCUDA_PATH', '/usr/lib/x86_64-linux-gnu')
+    return env
 
 
 def choose_dtype(requested, bf16_supported):

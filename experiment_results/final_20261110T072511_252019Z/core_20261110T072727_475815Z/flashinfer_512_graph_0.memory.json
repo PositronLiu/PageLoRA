@@ -1,0 +1,437 @@
+{
+  "scope": "whole_device_load_warmup_measurement",
+  "interval_s": 0.5,
+  "sample_count": 71,
+  "samples": [
+    {
+      "unix_s": 1794295751.487359,
+      "used_mib": 0.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 1.0
+    },
+    {
+      "unix_s": 1794295752.0433247,
+      "used_mib": 0.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295752.602337,
+      "used_mib": 0.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295753.1784034,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295753.720652,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295754.2835453,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295754.8249395,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295755.3855102,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295755.9463067,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295756.4874246,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295757.0286624,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295757.5903535,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295758.1495183,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295758.7083588,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295759.2597,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295759.82066,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295760.3624058,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295760.9028833,
+      "used_mib": 4.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295761.5264359,
+      "used_mib": 22.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295762.0645206,
+      "used_mib": 2343.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 10.0
+    },
+    {
+      "unix_s": 1794295762.622057,
+      "used_mib": 3403.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 4.0
+    },
+    {
+      "unix_s": 1794295763.1781616,
+      "used_mib": 4463.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 4.0
+    },
+    {
+      "unix_s": 1794295763.7722857,
+      "used_mib": 5497.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 4.0
+    },
+    {
+      "unix_s": 1794295764.3217406,
+      "used_mib": 6843.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 11.0
+    },
+    {
+      "unix_s": 1794295764.861245,
+      "used_mib": 7903.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 5.0
+    },
+    {
+      "unix_s": 1794295765.3990953,
+      "used_mib": 8963.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 5.0
+    },
+    {
+      "unix_s": 1794295765.9933698,
+      "used_mib": 11805.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 13.0
+    },
+    {
+      "unix_s": 1794295766.5321708,
+      "used_mib": 15225.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 12.0
+    },
+    {
+      "unix_s": 1794295767.0872538,
+      "used_mib": 15225.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 6.0
+    },
+    {
+      "unix_s": 1794295767.6818793,
+      "used_mib": 15335.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    },
+    {
+      "unix_s": 1794295768.2438478,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295768.7794673,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295769.3339448,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 46.0
+    },
+    {
+      "unix_s": 1794295769.8919587,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 50.0
+    },
+    {
+      "unix_s": 1794295770.4299817,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295770.9670582,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 46.0
+    },
+    {
+      "unix_s": 1794295771.5050259,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295772.0417936,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295772.598709,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 46.0
+    },
+    {
+      "unix_s": 1794295773.1554973,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295773.7124255,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 46.0
+    },
+    {
+      "unix_s": 1794295774.2735176,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295774.8294976,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 46.0
+    },
+    {
+      "unix_s": 1794295775.3677597,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295775.927839,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295776.4861765,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 46.0
+    },
+    {
+      "unix_s": 1794295777.0080547,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295777.5636492,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295778.1020253,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295778.676741,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295779.2157013,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295779.768872,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295780.3259032,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295780.898917,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295781.4358182,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295781.9908788,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 46.0
+    },
+    {
+      "unix_s": 1794295782.5488322,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 45.0
+    },
+    {
+      "unix_s": 1794295783.1060734,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295783.6805148,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295784.2373245,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295784.7755246,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295785.3477812,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295785.9016757,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295786.439976,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295786.9968216,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295787.535291,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 46.0
+    },
+    {
+      "unix_s": 1794295788.0722036,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295788.6486025,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295789.1854367,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 47.0
+    },
+    {
+      "unix_s": 1794295789.7248957,
+      "used_mib": 24149.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 31.0
+    },
+    {
+      "unix_s": 1794295790.2633321,
+      "used_mib": 723.0,
+      "total_mib": 81559.0,
+      "utilization_percent": 0.0
+    }
+  ],
+  "errors": [],
+  "sampled_peak_used_mib": 24149.0,
+  "baseline_used_mib": 0.0,
+  "warning": "Includes other processes and preallocation; sampling can miss transient peaks."
+}

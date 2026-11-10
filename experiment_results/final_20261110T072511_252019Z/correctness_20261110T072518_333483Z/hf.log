@@ -1,0 +1,11 @@
+[LOG 2026-11-10 07:25:21 UTC] ModelManager init model=/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B device=cuda:0 dtype=torch.float16 cpu_offload=False enable_multilora=False kvcache_mode=hf kvcache_decompose=False
+[LOG 2026-11-10 07:25:22 UTC] Tokenizer loaded
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:03<00:03,  3.27s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:05<00:00,  2.74s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:05<00:00,  2.82s/it]
+[LOG 2026-11-10 07:25:32 UTC] Base model loaded
+[LOG 2026-11-10 07:25:32 UTC] Enabled input require grads for checkpointed training
+[LOG 2026-11-10 07:25:32 UTC] Manual LoRA ready active=general lora_tensors_gpu=0
+The following generation flags are not valid and may be ignored: ['temperature', 'top_p']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
+[LOG 2026-11-10 07:25:33 UTC] DEBUG gen: response_ids=[47116, 624, 151649, 271, 32, 84648, 6500, 11, 476, 1376] len=32 eos=151643 is_eos=False
+[LOG 2026-11-10 07:25:33 UTC] DEBUG gen: response_ids=[624, 151649, 271, 32, 84648, 6500, 11, 476, 1376, 19083] len=32 eos=151643 is_eos=False
+[LOG 2026-11-10 07:25:34 UTC] DEBUG gen: response_ids=[84648, 6500, 374, 264, 943, 315, 4938, 1483, 304, 5662] len=32 eos=151643 is_eos=False
+[LOG 2026-11-10 07:25:34 UTC] DEBUG gen: response_ids=[20772, 3170, 264, 84648, 6500, 14177, 973, 3078, 460, 46719] len=32 eos=151643 is_eos=False

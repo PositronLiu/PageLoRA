@@ -1,0 +1,94 @@
+[
+  {
+    "variant": "hf",
+    "returncode": 0,
+    "command": [
+      "/opt/conda/bin/python",
+      "-m",
+      "scripts.check_inference_correctness",
+      "--model",
+      "/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B",
+      "--worker",
+      "hf",
+      "--dtype",
+      "float16",
+      "--cases",
+      "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/cases.json",
+      "--result",
+      "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/hf.json",
+      "--output-tokens",
+      "32",
+      "--max-model-len",
+      "8192"
+    ]
+  },
+  {
+    "variant": "flashinfer_eager",
+    "returncode": 0,
+    "command": [
+      "/opt/conda/bin/python",
+      "-m",
+      "scripts.check_inference_correctness",
+      "--model",
+      "/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B",
+      "--worker",
+      "flashinfer_eager",
+      "--dtype",
+      "float16",
+      "--cases",
+      "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/cases.json",
+      "--result",
+      "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/flashinfer_eager.json",
+      "--output-tokens",
+      "32",
+      "--max-model-len",
+      "8192"
+    ]
+  },
+  {
+    "variant": "flashinfer_graph",
+    "returncode": 0,
+    "command": [
+      "/opt/conda/bin/python",
+      "-m",
+      "scripts.check_inference_correctness",
+      "--model",
+      "/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B",
+      "--worker",
+      "flashinfer_graph",
+      "--dtype",
+      "float16",
+      "--cases",
+      "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/cases.json",
+      "--result",
+      "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/flashinfer_graph.json",
+      "--output-tokens",
+      "32",
+      "--max-model-len",
+      "8192"
+    ]
+  },
+  {
+    "variant": "vllm",
+    "returncode": 0,
+    "command": [
+      "/opt/conda/bin/python",
+      "-m",
+      "scripts.check_inference_correctness",
+      "--model",
+      "/root/bayes-pub/models/DeepSeek-R1-Distill-Qwen-7B",
+      "--worker",
+      "vllm",
+      "--dtype",
+      "float16",
+      "--cases",
+      "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/cases.json",
+      "--result",
+      "/root/bayes-tmp/pagelora-h800/final_20261110T072511_252019Z/correctness_20261110T072518_333483Z/vllm.json",
+      "--output-tokens",
+      "32",
+      "--max-model-len",
+      "8192"
+    ]
+  }
+]

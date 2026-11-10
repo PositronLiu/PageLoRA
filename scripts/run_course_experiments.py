@@ -102,6 +102,8 @@ def main():
     destination = Path(args.output_dir).resolve() / f"{args.suite}_{stamp}"
     destination.mkdir(parents=True, exist_ok=False)
     env = os.environ.copy()
+    from scripts.hardware_support import configure_single_gpu_environment
+    configure_single_gpu_environment(env)
     env.update(CUDA_VISIBLE_DEVICES=args.gpu, PAGE_LORA_DTYPE=args.dtype, PYTHONUNBUFFERED="1",
                MINI_OPENCLAW_FLASHINFER_PERF_LOG="1", MINI_OPENCLAW_FLASHINFER_PERF_SYNC="0",
                MINI_OPENCLAW_FLASHINFER_TORCH_COMPILE="0",
@@ -112,7 +114,7 @@ def main():
         return {"command": command, "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
 
     metadata = {"utc": stamp, "platform": platform.platform(), "python": sys.version,
-                "args": vars(args), "environment": {k: v for k, v in env.items() if k.startswith(("CUDA_", "MINI_OPENCLAW_"))},
+                "args": vars(args), "environment": {k: v for k, v in env.items() if k.startswith(("CUDA_", "MINI_OPENCLAW_", "PAGE_LORA_", "TRITON_", "VLLM_", "GLOO_", "NCCL_", "OMP_", "MKL_"))},
                 "git": record(["git", "rev-parse", "HEAD"]),
                 "diff": record(["git", "diff", "--stat"]),
                 "packages": record([sys.executable, "-m", "pip", "freeze"])}
