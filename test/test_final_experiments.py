@@ -6,9 +6,27 @@ import unittest
 
 from scripts.check_inference_correctness import validate_coverage
 from scripts.run_final_experiments import build_commands, source_manifest, write_report
+from scripts.hardware_support import choose_dtype
 
 
 class FinalExperimentTests(unittest.TestCase):
+    def test_hardware_dtype_policy(self):
+        self.assertEqual(choose_dtype('auto', False), 'float16')
+        self.assertEqual(choose_dtype('auto', True), 'bfloat16')
+        self.assertEqual(choose_dtype('float16', True), 'float16')
+        with self.assertRaises(ValueError):
+            choose_dtype('bfloat16', False)
+
+    def test_t4_profile_is_explicit_partial_matrix(self):
+        args = argparse.Namespace(model='/model', gpu='0', max_model_len=4096,
+            prompt_lengths=[512], output_tokens=32, warmup_runs=1, measure_runs=2,
+            profile='t4', dtype='float16')
+        commands = build_commands(args, Path('results'))
+        self.assertEqual(len(commands), 2)
+        self.assertEqual(commands[0][-3:], ['--variants', 'hf', 'vllm'])
+        self.assertEqual(commands[1][-3:], ['--backends', 'hf', 'vllm'])
+        self.assertTrue(all(c[c.index('--dtype') + 1] == 'float16' for c in commands))
+
     def test_correctness_fails_closed(self):
         row = {'case': 'a', 'tokens': [1], 'first_logits': [1., 2.]}
         reports = {'hf': [row], 'flashinfer_eager': [dict(row, reuse_tokens=[1])]}

@@ -146,8 +146,15 @@ def get_torch_dtype() -> torch.dtype:
         Torch dtype.
     """
 
+    requested = os.getenv('PAGE_LORA_DTYPE', 'auto')
+    if requested not in ('auto', 'float16', 'bfloat16'):
+        raise ValueError('PAGE_LORA_DTYPE must be auto, float16 or bfloat16')
+    if requested != 'auto':
+        if requested == 'bfloat16' and (not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 8 or not torch.cuda.is_bf16_supported()):
+            raise ValueError('BF16 requested on an unsupported device')
+        return getattr(torch, requested)
     if torch.cuda.is_available():
-        return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        return torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 and torch.cuda.is_bf16_supported() else torch.float16
     return torch.float32
 
 

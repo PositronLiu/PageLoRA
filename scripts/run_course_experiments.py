@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def build_jobs(args):
+    dtype = getattr(args, "dtype", "auto")
+    backends = getattr(args, "backends", ["hf", "vllm", "flashinfer"])
     common = ["--model", args.model, "--device", "cuda:0", "--adapter-role", "base",
               "--ignore-eos", "--sampling-mode", "greedy_fast", "--compute-logprobs", "false",
               "--repetition-penalty", "1.0", "--seed", "42",
@@ -36,20 +38,22 @@ def build_jobs(args):
                     if backend == "flashinfer":
                         extra += ["--flashinfer-cuda-graph-decode"]
                     else:
-                        extra += ["--vllm-tensor-parallel-size", "1", "--vllm-dtype", "bfloat16",
+                        extra += ["--vllm-tensor-parallel-size", "1", "--vllm-dtype", dtype,
                                   "--vllm-gpu-memory-utilization", "0.8",
                                   "--vllm-max-model-len", str(args.max_model_len)]
                     jobs.append((f"prefix_{backend}_{length}_reset_{reset}",
                                  [sys.executable, "-m", "test.inference.bench_prefix_caching"] + common + tokens + extra))
         else:
             for backend, graph in (("hf", False), ("vllm", False), ("flashinfer", False), ("flashinfer", True)):
+                if backend not in backends:
+                    continue
                 extra = ["--throughput-timing", "total"]
                 if backend == "flashinfer":
                     extra += ["--flashinfer-cache-policy", "cold"]
                     if graph:
                         extra += ["--flashinfer-cuda-graph-decode"]
                 if backend == "vllm":
-                    extra += ["--vllm-tensor-parallel-size", "1", "--vllm-dtype", "bfloat16",
+                    extra += ["--vllm-tensor-parallel-size", "1", "--vllm-dtype", dtype,
                               "--vllm-gpu-memory-utilization", "0.8",
                               "--vllm-max-model-len", str(args.max_model_len)]
                 suffix = f"_graph_{int(graph)}" if backend == "flashinfer" else ""
@@ -72,7 +76,14 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--memory-interval", type=float, default=0.5,
                         help="Whole-device nvidia-smi sampling interval in seconds (>=0.1).")
+    parser.add_argument("--dtype", choices=("auto", "float16", "bfloat16"), default="auto")
+    parser.add_argument("--backends", nargs="+", choices=("hf", "vllm", "flashinfer"), default=["hf", "vllm", "flashinfer"])
     args = parser.parse_args()
+    hardware = None
+    if not args.dry_run:
+        from scripts.hardware_support import probe_gpu
+        hardware = probe_gpu(args.gpu, args.dtype)
+        args.dtype = hardware["dtype"]
     if not 0.1 <= args.memory_interval <= 60:
         parser.error("--memory-interval must be between 0.1 and 60 seconds")
     if "," in args.gpu or not args.gpu.strip():
@@ -91,7 +102,7 @@ def main():
     destination = Path(args.output_dir).resolve() / f"{args.suite}_{stamp}"
     destination.mkdir(parents=True, exist_ok=False)
     env = os.environ.copy()
-    env.update(CUDA_VISIBLE_DEVICES=args.gpu, PYTHONUNBUFFERED="1",
+    env.update(CUDA_VISIBLE_DEVICES=args.gpu, PAGE_LORA_DTYPE=args.dtype, PYTHONUNBUFFERED="1",
                MINI_OPENCLAW_FLASHINFER_PERF_LOG="1", MINI_OPENCLAW_FLASHINFER_PERF_SYNC="0",
                MINI_OPENCLAW_FLASHINFER_TORCH_COMPILE="0",
                MINI_OPENCLAW_FLASHINFER_COMPILE_MLP="0", MINI_OPENCLAW_FLASHINFER_COMPILE_POST="0")
@@ -105,21 +116,12 @@ def main():
                 "git": record(["git", "rev-parse", "HEAD"]),
                 "diff": record(["git", "diff", "--stat"]),
                 "packages": record([sys.executable, "-m", "pip", "freeze"])}
-    metadata["torch_preflight"] = record([
-        sys.executable, "-c",
-        "import torch; print(torch.__version__, torch.version.cuda); "
-        "assert torch.cuda.is_available(), 'CUDA is unavailable'; "
-        "print(torch.cuda.get_device_name(0)); "
-        "assert torch.cuda.is_bf16_supported(), "
-        "'This matrix requires BF16 to match the explicit vLLM dtype'",
-    ])
+    metadata["hardware"] = hardware
     try:
         metadata["gpu"] = record(["nvidia-smi"])
     except FileNotFoundError:
         raise SystemExit("nvidia-smi not found; run this script on the course CUDA server")
     (destination / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-    if metadata["torch_preflight"]["returncode"]:
-        raise SystemExit(f"CUDA/BF16 preflight failed; inspect {destination / 'metadata.json'}")
     outcomes = []
     for name, command in jobs:
         log = destination / f"{name}.log"

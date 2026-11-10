@@ -65,8 +65,11 @@ def worker(args):
     import torch
     from test.inference.common import build_parser, _make_flashinfer_manager, _make_hf_manager, _make_vllm_llm
     torch.manual_seed(42)
-    if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
-        raise RuntimeError('This correctness matrix requires CUDA and BF16')
+    if not torch.cuda.is_available():
+        raise RuntimeError('CUDA is required')
+    from scripts.hardware_support import choose_dtype
+    args.dtype = choose_dtype(args.dtype, torch.cuda.get_device_capability(0)[0] >= 8 and torch.cuda.is_bf16_supported())
+    os.environ['PAGE_LORA_DTYPE'] = args.dtype
     cases = json.loads(Path(args.cases).read_text(encoding='utf-8'))
     config = build_parser().parse_args(['--model',args.model, '--adapter-role','base', '--lora-dropout','0',
         '--sampling-mode','greedy_fast', '--compute-logprobs','false', '--repetition-penalty','1',
@@ -75,7 +78,7 @@ def worker(args):
     if args.worker == 'vllm':
         from vllm import SamplingParams
         from vllm.inputs import TokensPrompt
-        config.vllm_dtype='bfloat16'
+        config.vllm_dtype=args.dtype
         config.vllm_max_model_len=args.max_model_len
         config.vllm_gpu_memory_utilization=.8
         llm=_make_vllm_llm(config)
@@ -151,7 +154,7 @@ def worker(args):
         except importlib.metadata.PackageNotFoundError:
             packages[package]=None
     Path(args.result).write_text(json.dumps({'variant':args.worker,'model':args.model,
-        'dtype':'bfloat16','gpu':torch.cuda.get_device_name(0), 'packages':packages,
+        'dtype':args.dtype,'gpu':torch.cuda.get_device_name(0), 'packages':packages,
         'results':results}),encoding='utf-8')
 
 
@@ -168,6 +171,7 @@ def main():
     parser.add_argument('--worker',choices=VARIANTS,help=argparse.SUPPRESS)
     parser.add_argument('--cases',help=argparse.SUPPRESS)
     parser.add_argument('--result',help=argparse.SUPPRESS)
+    parser.add_argument('--dtype',choices=('auto','float16','bfloat16'),default='auto')
     args=parser.parse_args()
     if args.output_tokens<1 or args.atol<0 or args.rtol<0 or not all(map(math.isfinite,[args.atol,args.rtol])):
         parser.error('Positive output length and finite non-negative tolerances required')
@@ -180,6 +184,9 @@ def main():
         parser.error('HF reference must be included')
     if len(set(args.variants))<2:
         parser.error('Select HF and at least one candidate backend')
+    from scripts.hardware_support import probe_gpu
+    hardware = probe_gpu(args.gpu, args.dtype)
+    args.dtype = hardware['dtype']
     from transformers import AutoTokenizer
     from data.tokenizer_utils import encode_chat
     tokenizer=AutoTokenizer.from_pretrained(args.model,trust_remote_code=True)
@@ -194,18 +201,18 @@ def main():
     cases_path=destination/'cases.json'
     cases_path.write_text(json.dumps(cases),encoding='utf-8')
     env=os.environ.copy()
-    env.update(CUDA_VISIBLE_DEVICES=args.gpu,MINI_OPENCLAW_FLASHINFER_PERF_LOG='1',
+    env.update(CUDA_VISIBLE_DEVICES=args.gpu,PAGE_LORA_DTYPE=args.dtype,MINI_OPENCLAW_FLASHINFER_PERF_LOG='1',
                MINI_OPENCLAW_FLASHINFER_TORCH_COMPILE='0', MINI_OPENCLAW_FLASHINFER_COMPILE_MLP='0',
                MINI_OPENCLAW_FLASHINFER_COMPILE_POST='0',VLLM_WORKER_MULTIPROC_METHOD='spawn')
     revision=subprocess.run(['git','rev-parse','HEAD'],cwd=ROOT,capture_output=True,text=True)
     (destination/'metadata.json').write_text(json.dumps({'args':vars(args),'python':sys.version,
-        'commit':revision.stdout.strip(),'git_error':revision.stderr.strip(),
+        'hardware':hardware,'commit':revision.stdout.strip(),'git_error':revision.stderr.strip(),
         'environment':{k:v for k,v in env.items() if k.startswith(('CUDA_','MINI_OPENCLAW_','VLLM_'))}},indent=2),encoding='utf-8')
     outcomes=[]; reports={}
     for variant in dict.fromkeys(args.variants):
         result=destination/f'{variant}.json'
         command=[sys.executable,'-m','scripts.check_inference_correctness','--model',args.model,
-                 '--worker',variant,'--cases',str(cases_path),'--result',str(result),
+                 '--worker',variant,'--dtype',args.dtype,'--cases',str(cases_path),'--result',str(result),
                  '--output-tokens',str(args.output_tokens),'--max-model-len',str(args.max_model_len)]
         print('Checking',variant,flush=True)
         with (destination/f'{variant}.log').open('w',encoding='utf-8') as stream:
@@ -253,7 +260,7 @@ def main():
                 'A mismatch requires inspecting first divergence and floating-point margins; it alone does not prove a bug.',
                 'These cases cover repeated prompts and page boundaries, not concurrent serving or OOM recovery.',
                 'Graph validation requires a nonzero count of successful runner replays.',
-                'BF16 tolerances default to atol=0.1, rtol=0.01; these are screening settings, not universal error bounds.']}
+                'Logits tolerances default to atol=0.1, rtol=0.01; these are screening settings, not universal error bounds.']}
     (destination/'report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     lines=['# Correctness report','',f'Strict pass: {passed}', '',
            '| Candidate (reference: HF unless noted) | Case | Exact tokens | First divergence | Logits allclose | Cache reused | Graph replayed |',
