@@ -10,7 +10,7 @@ import torch
 from model.flashinfer.attention_backend import FlashInferAttentionBackend
 from model.flashinfer.compiled_mlp import run_compiled_mlp
 from model.flashinfer.compiled_post import run_compiled_post_attention
-from model.flashinfer.norm import apply_rmsnorm
+from model.flashinfer.norm import apply_rmsnorm, add_residual_rmsnorm
 from model.flashinfer.perf import FlashInferPerfTrace
 from model.flashinfer.projection import (
     apply_flashinfer_rope_pos_ids,
@@ -332,8 +332,7 @@ def run_flashinfer_decode_layer_static_append(
     attn_output = attn_output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
     o_module = plan.modules.get("self_attn.o_proj") or layer.self_attn.o_proj
     attn_output = project_linear(o_module, attn_output)
-    hidden = hidden + attn_output
-    mlp_input = apply_rmsnorm(layer.post_attention_layernorm, hidden)
+    hidden, mlp_input = add_residual_rmsnorm(layer.post_attention_layernorm, hidden, attn_output)
     mlp_output = _run_mlp_eager(layer.mlp, mlp_input)
     return hidden + mlp_output
 
@@ -392,8 +391,7 @@ def run_flashinfer_decode_layer_static_append_batch(
     attn_output = attn_output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
     o_module = plan.modules.get("self_attn.o_proj") or layer.self_attn.o_proj
     attn_output = project_linear(o_module, attn_output)
-    hidden = hidden + attn_output
-    mlp_input = apply_rmsnorm(layer.post_attention_layernorm, hidden)
+    hidden, mlp_input = add_residual_rmsnorm(layer.post_attention_layernorm, hidden, attn_output)
     mlp_output = _run_mlp_eager(layer.mlp, mlp_input)
     return hidden + mlp_output
 

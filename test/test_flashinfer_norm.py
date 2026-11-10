@@ -62,3 +62,33 @@ def test_apply_rmsnorm_does_not_replace_layernorm(monkeypatch):
     output = norm_ops.apply_rmsnorm(layernorm, hidden)
 
     assert torch.allclose(output, layernorm(hidden))
+
+
+def test_residual_norm_fallback_preserves_inputs(monkeypatch):
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_FUSED_ADD_RMSNORM", "0")
+    norm = _RMSNormLike(4)
+    residual, update = torch.randn(1, 1, 4), torch.randn(1, 1, 4)
+    r0, u0 = residual.clone(), update.clone()
+    summed, normalized = norm_ops.add_residual_rmsnorm(norm, residual, update)
+    torch.testing.assert_close(summed, r0 + u0)
+    torch.testing.assert_close(normalized, norm(r0 + u0))
+    assert torch.equal(residual, r0) and torch.equal(update, u0)
+
+
+def test_fused_residual_norm_returns_both_updated_buffers(monkeypatch):
+    monkeypatch.setenv("MINI_OPENCLAW_FLASHINFER_FUSED_ADD_RMSNORM", "1")
+    monkeypatch.setattr(norm_ops, "_can_use_flashinfer_rmsnorm", lambda *args: True)
+    norm = _RMSNormLike(4).half()
+    residual, update = torch.randn(1, 1, 4).half(), torch.randn(1, 1, 4).half()
+    expected = residual + update
+
+    def fused(x, r, weight, eps):
+        r.add_(x)
+        x.copy_(norm(r))
+
+    monkeypatch.setattr(norm_ops.flashinfer.norm, 'fused_add_rmsnorm', fused, raising=False)
+    with torch.no_grad():
+        summed, normalized = norm_ops.add_residual_rmsnorm(norm, residual, update)
+    assert summed is residual and normalized is update
+    torch.testing.assert_close(summed, expected)
+    torch.testing.assert_close(normalized, norm(expected))

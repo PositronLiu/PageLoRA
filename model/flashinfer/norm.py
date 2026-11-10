@@ -24,6 +24,39 @@ def apply_rmsnorm(norm: torch.nn.Module, hidden: torch.Tensor) -> torch.Tensor:
     return norm(hidden)
 
 
+def add_residual_rmsnorm(
+    norm: torch.nn.Module, residual: torch.Tensor, update: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return (residual + update, normalized sum) for graph-owned buffers.
+
+    The optional fused kernel mutates *both* inputs. Callers must own these
+    tensors exclusively and must not need their old values afterwards. This
+    helper is intentionally limited to the static inference decode path.
+    """
+    fused = (
+        _env_enabled("MINI_OPENCLAW_FLASHINFER_FUSED_ADD_RMSNORM", default=False)
+        and flashinfer_rmsnorm_enabled()
+        and not torch.is_grad_enabled()
+        and _can_use_flashinfer_rmsnorm(update, norm)
+        and not _is_gemma_rmsnorm(norm)
+        and hasattr(flashinfer.norm, "fused_add_rmsnorm")
+        and residual.shape == update.shape
+        and residual.dtype == update.dtype == norm.weight.dtype
+        and update.dtype in (torch.float16, torch.bfloat16)
+        and residual.device == update.device
+        and residual.is_contiguous() and update.is_contiguous()
+        and residual.data_ptr() != update.data_ptr()
+    )
+    if fused:
+        flashinfer.norm.fused_add_rmsnorm(
+            update.view(-1, update.size(-1)), residual.view(-1, residual.size(-1)),
+            norm.weight, eps=_norm_eps(norm),
+        )
+        return residual, update
+    summed = residual + update
+    return summed, apply_rmsnorm(norm, summed)
+
+
 def _flashinfer_rmsnorm(flat: torch.Tensor, norm: torch.nn.Module) -> torch.Tensor:
     weight = getattr(norm, "weight")
     eps = _norm_eps(norm)

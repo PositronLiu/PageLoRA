@@ -329,3 +329,49 @@ def test_plan_decode_reuses_page_table_buffer():
     assert calls == [(["prefix", "new"], torch.device("cpu"), True)]
     assert backend.kwargs["paged_kv_indices"] is table.paged_kv_indices
     assert backend.kwargs["q_data_type"] is torch.float32
+
+
+def test_async_host_plan_retains_sources_until_upload_event(monkeypatch):
+    from collections import deque
+
+    Backend = _backend_class(monkeypatch)
+    backend = Backend.__new__(Backend)
+    backend.device = torch.device('cuda')
+    backend.num_qo_heads, backend.num_kv_heads = 28, 4
+    backend.head_dim, backend.page_size, backend.query_rescale = 128, 32, 16.
+    backend._decode_wrapper = _FakeWrapper(None)
+    backend._decode_host_uploads = deque()
+    backend._ensure_graph_safe_decode_buffers = lambda *args: None
+
+    class Event:
+        def __init__(self):
+            self.done = False
+            self.recorded = False
+        def record(self, stream):
+            self.recorded = True
+        def query(self):
+            return self.done
+        def synchronize(self):
+            self.done = True
+
+    monkeypatch.setattr(torch.cuda, 'Event', Event)
+    monkeypatch.setattr(torch.cuda, 'current_stream', lambda device: 'stream')
+    def source():
+        return SimpleNamespace(device=torch.device('cpu'), is_pinned=lambda: True)
+    tensors = (source(), source(), source())
+    def plan(items):
+        backend.plan_decode(paged_kv_indptr=items[0], paged_kv_indices=items[1],
+                            paged_kv_last_page_len=items[2], q_data_type=torch.float16)
+    plan(tensors)
+    event, retained = backend._decode_host_uploads[0]
+    assert event.recorded and retained == tensors
+    assert backend._decode_wrapper.plan_kwargs['non_blocking'] is True
+    assert backend._decode_wrapper.plan_kwargs['sm_scale'] == 16 / (128 ** .5)
+    event.done = True
+    plan((source(), source(), source()))
+    assert all(e is not event for e, _ in backend._decode_host_uploads)
+    oldest = backend._decode_host_uploads[0][0]
+    for _ in range(9):
+        plan((source(), source(), source()))
+    assert len(backend._decode_host_uploads) <= 8
+    assert oldest.done  # Backpressure waits rather than recycling pending pinned memory.

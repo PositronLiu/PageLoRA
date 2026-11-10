@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from typing import TYPE_CHECKING
 
@@ -28,7 +29,7 @@ from model.flashinfer.norm import apply_rmsnorm
 from model.flashinfer.perf import FlashInferPerfTrace
 from model.flashinfer.packed_ops import project_linear
 from model.flashinfer.sampling import greedy_argmax_token
-from model.kvcache.flashinfer_page_table import FlashInferPageTable
+from model.kvcache.flashinfer_page_table import FlashInferPageTable, build_flashinfer_page_table
 from model.kvcache.page_admission import admit_paged_kv_request
 from model.kvcache.paged_kvcache_manager import FlashInferPagedKVCacheManager
 from model.kvcache.paged_kvcache_request import FlashInferPagedKVRequest
@@ -194,11 +195,19 @@ def _plan_decode(
 ) -> FlashInferPageTable:
     """Build page metadata and plan one FlashInfer decode step."""
 
-    page_table = cache_mgr.build_page_table(
-        [*request_cache.prefix_spans, *request_cache.new_spans],
-        device=device,
-        reuse_buffer=True,
-    )
+    spans = [*request_cache.prefix_spans, *request_cache.new_spans]
+    # FlashInfer plan needs host metadata. Supplying the existing CUDA table
+    # makes it read the metadata back synchronously every decode token.
+    # Keep the experiment opt-in until the full GPU gate has passed.
+    host_plan = device.type == "cuda" and os.getenv(
+        "MINI_OPENCLAW_FLASHINFER_HOST_PLAN", "0"
+    ).lower() in {"1", "true", "yes", "on"}
+    if host_plan:
+        page_table = build_flashinfer_page_table(
+            spans, page_size=cache_mgr.page_size, device=torch.device("cpu"), pin_memory=True,
+        )
+    else:
+        page_table = cache_mgr.build_page_table(spans, device=device, reuse_buffer=True)
     backend.plan_decode(
         paged_kv_indptr=page_table.paged_kv_indptr,
         paged_kv_indices=page_table.paged_kv_indices,

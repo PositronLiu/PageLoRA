@@ -139,6 +139,7 @@ def build_flashinfer_page_table(
     *,
     page_size: int,
     device: torch.device,
+    pin_memory: bool = False,
 ) -> FlashInferPageTable:
     """Build a single-row FlashInfer page table from aligned page spans.
 
@@ -150,9 +151,9 @@ def build_flashinfer_page_table(
     indices, last_page_len = _validate_and_collect_page_table(spans, page_size=page_size)
 
     return FlashInferPageTable(
-        paged_kv_indptr=torch.tensor([0, len(indices)], device=device, dtype=torch.int32),
-        paged_kv_indices=torch.tensor(indices, device=device, dtype=torch.int32),
-        paged_kv_last_page_len=torch.tensor([last_page_len], device=device, dtype=torch.int32),
+        paged_kv_indptr=torch.tensor([0, len(indices)], device=device, dtype=torch.int32, pin_memory=pin_memory),
+        paged_kv_indices=torch.tensor(indices, device=device, dtype=torch.int32, pin_memory=pin_memory),
+        paged_kv_last_page_len=torch.tensor([last_page_len], device=device, dtype=torch.int32, pin_memory=pin_memory),
     )
 
 

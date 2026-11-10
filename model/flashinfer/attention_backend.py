@@ -7,6 +7,7 @@ can stay independent from FlashInfer version details.
 from __future__ import annotations
 
 import math
+from collections import deque
 
 import flashinfer
 import torch
@@ -53,6 +54,10 @@ class FlashInferAttentionBackend:
         else:
             self._decode_wrapper = self._make_wrapper(flashinfer.BatchDecodeWithPagedKVCacheWrapper)
         self._decode_graph_buffers = None
+        # An async H2D source must stay alive and immutable until its upload
+        # completes. Each host-plan call owns fresh pinned tensors; events
+        # retire them on this stream, with a bounded number kept in flight.
+        self._decode_host_uploads = deque()
         self._prefill_wrapper = self._make_wrapper(flashinfer.BatchPrefillWithPagedKVCacheWrapper)
 
     def plan_decode(
@@ -71,6 +76,16 @@ class FlashInferAttentionBackend:
         """
 
         self._ensure_graph_safe_decode_buffers(paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len)
+        host_tensors = (paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len)
+        async_host = self.device.type == "cuda" and all(
+            t.device.type == "cpu" and t.is_pinned() for t in host_tensors
+        )
+        if async_host:
+            while self._decode_host_uploads and self._decode_host_uploads[0][0].query():
+                self._decode_host_uploads.popleft()
+            if len(self._decode_host_uploads) >= 8:
+                self._decode_host_uploads[0][0].synchronize()
+                self._decode_host_uploads.popleft()
         plan_kwargs = {
             "indptr": paged_kv_indptr,
             "indices": paged_kv_indices,
@@ -86,13 +101,21 @@ class FlashInferAttentionBackend:
             "q_data_type": q_data_type,
             "kv_data_type": kv_data_type,
         }
-        self._call_plan(
-            self._decode_wrapper,
-            plan_kwargs,
-            paged_kv_indptr,
-            paged_kv_indices,
-            paged_kv_last_page_len,
-        )
+        if async_host:
+            plan_kwargs["non_blocking"] = True
+        try:
+            self._call_plan(
+                self._decode_wrapper,
+                plan_kwargs,
+                paged_kv_indptr,
+                paged_kv_indices,
+                paged_kv_last_page_len,
+            )
+        finally:
+            if async_host:
+                event = torch.cuda.Event()
+                event.record(torch.cuda.current_stream(self.device))
+                self._decode_host_uploads.append((event, host_tensors))
 
     def run_decode(
         self,
@@ -181,9 +204,9 @@ class FlashInferAttentionBackend:
         if buffers is not None and buffers[0].numel() == indptr.numel() and buffers[1].numel() >= indices.numel():
             return
         capacity = max(16, 1 << max(0, indices.numel() - 1).bit_length())
-        buffers = (torch.empty_like(indptr),
+        buffers = (torch.empty_like(indptr, device=self.device),
                    torch.empty(capacity, device=self.device, dtype=indices.dtype),
-                   torch.empty_like(last_page_len))
+                   torch.empty_like(last_page_len, device=self.device))
         self._decode_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(
             self.workspace_buffer, kv_layout='NHD', use_cuda_graph=True,
             use_tensor_cores=self.decode_use_tensor_cores,
